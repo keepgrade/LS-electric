@@ -1,13 +1,16 @@
 from shiny import App, render, ui, reactive
+from shinywidgets import render_widget, output_widget
+
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+
 from datetime import datetime, timedelta
-import numpy as np
-from sklearn.linear_model import LinearRegression
+import pickle
 import warnings
-warnings.filterwarnings('ignore')
-from shinywidgets import render_widget, output_widget
+warnings.filterwarnings("ignore")
+
 
 # 데이터 로드
 def load_data():
@@ -249,259 +252,349 @@ app_ui = ui.page_navbar(
         )
     ),
     
-    ui.nav_panel("요금분석 보고서", 
-        ui.div(
-            ui.h3("📊 요금분석 보고서"),
-            ui.p("여기에 분석 보고서 내용이 들어갑니다.")
+    # ────────────────────
+    # TAB 2: 전기요금 분석 보고서
+    # ────────────────────
+    ui.nav_panel(
+        "분석 보고서",
+        ui.layout_column_wrap(
+            ui.card(
+                ui.card_header("📋 기간별 전력 사용 요약"),
+                ui.layout_sidebar(
+                    ui.sidebar(
+                        ui.input_radio_buttons(
+                            "summary_period",
+                            "요약 기간:",
+                            choices={
+                                "15min": "최근 15분",
+                                "30min": "최근 30분",
+                                "1hour": "최근 1시간",
+                                "today": "오늘",
+                                "week": "이번주",
+                                "month": "이번달"
+                            },
+                            selected="today"
+                        )
+                    ),
+                    ui.layout_column_wrap(
+                        ui.value_box(
+                            title="누적 전력사용량",
+                            value=ui.output_text("summary_power_usage"),
+                            showcase="⚡"
+                        ),
+                        ui.value_box(
+                            title="누적 전력요금",
+                            value=ui.output_text("summary_power_cost"),
+                            showcase="💰"
+                        ),
+                        ui.value_box(
+                            title="누적 탄소배출량",
+                            value=ui.output_text("summary_carbon_emission"),
+                            showcase="🌱"
+                        ),
+                        ui.value_box(
+                            title="평균 역률",
+                            value=ui.output_text("summary_power_factor"),
+                            showcase="⚙️"
+                        ),
+                        width=1/2
+                    )
+                )
+            ),
+            ui.card(
+                ui.card_header("📈 전력 요금 시계열 분석"),
+                output_widget("cost_trend_chart")
+            ),
+            ui.card(
+                ui.card_header("📊 상세 분석 정보"),
+                ui.layout_column_wrap(
+                    ui.card(ui.card_header("최고 요금 정보"), ui.output_text("peak_cost_info")),
+                    ui.card(ui.card_header("평균 탄소배출량"), ui.output_text("avg_carbon_info")),
+                    ui.card(ui.card_header("주요 작업 유형"), ui.output_text("main_work_type_info")),
+                    ui.card(ui.card_header("전월 대비 증감률"), ui.output_text("monthly_change_info")),
+                    width=1/2
+                ),
+                ui.br(),
+                ui.div(
+                    ui.input_action_button("download_pdf", "📄 PDF 보고서 다운로드", class_="btn-success btn-lg"),
+                    class_="text-center"
+                )
+            ),
+            width=1
         )
     ),
-    
-    ui.nav_panel("부록",
-        ui.div(
-            ui.h3("📚 부록"),
-            ui.p("여기에 부록 내용이 들어갑니다.")
-        )
+
+    # ────────────────────
+    # TAB 3: 부록
+    # ────────────────────
+    ui.nav_panel(
+        "부록",
+        ui.h3("📚 부록")
     ),
-    
-    title="전기요금 실시간 모니터링 대시보드",
+
+    title="⚡ LS Electric 전기요금 실시간 모니터링",
     id="main_navbar"
 )
 
 # 서버 로직
 def server(input, output, session):
-    
-    # 필터링된 데이터
+    # ─────────────────────────────────────────────────────────
+    # Reactive: 필터링된 데이터 (공통)
+    # ─────────────────────────────────────────────────────────
     @reactive.Calc
     def filtered_data():
-        filtered_df = df.copy()
-        
-        if hasattr(input, 'date_range_monitoring') and input.date_range_monitoring():
-            start_date = pd.to_datetime(input.date_range_monitoring()[0])
-            end_date = pd.to_datetime(input.date_range_monitoring()[1])
-            filtered_df = filtered_df[
-                (filtered_df['측정일시'].dt.date >= start_date.date()) &
-                (filtered_df['측정일시'].dt.date <= end_date.date())
+        df2 = df.copy()
+        if input.date_range_monitoring():
+            start, end = input.date_range_monitoring()
+            start = pd.to_datetime(start).date()
+            end   = pd.to_datetime(end).date()
+            df2 = df2[
+                (df2["측정일시"].dt.date >= start) &
+                (df2["측정일시"].dt.date <= end)
             ]
-        
-        return filtered_df
-    
-    # [A] 요약 카드들
+        return df2
+
+    @reactive.Calc
+    def get_filtered_data_by_period():
+        period = input.summary_period()
+        now = datetime.now()
+        if period == "15min":
+            start_time = now - timedelta(minutes=15)
+        elif period == "30min":
+            start_time = now - timedelta(minutes=30)
+        elif period == "1hour":
+            start_time = now - timedelta(hours=1)
+        elif period == "today":
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "week":
+            start_time = now - timedelta(days=7)
+        elif period == "month":
+            start_time = now - timedelta(days=30)
+        else:
+            start_time = now - timedelta(days=1)
+        return df[df["측정일시"] >= start_time].copy()
+
+    # ─────────────────────────────────────────────────────────
+    # TAB 1: 실시간 모니터링 출력
+    # ─────────────────────────────────────────────────────────
     @output
-    @render.ui
-    def card_power():
-        data = filtered_data()
-        current_power = data['전력사용량'].iloc[-1] if len(data) > 0 else 0
-        return ui.div(
-            ui.div(f"{current_power:,.0f}", class_="metric-value"),
-            ui.div("kWh", class_="metric-label"),
-            class_="metric-card"
-        )
-    
+    @render.text
+    def rt_power_usage():
+        val = filtered_data()["전력사용량"].iloc[-1] if not filtered_data().empty else 0
+        return f"{val:,.1f} kWh"
+
     @output
-    @render.ui
-    def card_cost():
-        data = filtered_data()
-        current_cost = data['전기요금'].iloc[-1] if len(data) > 0 else 0
-        return ui.div(
-            ui.div(f"{current_cost:,.0f}", class_="metric-value"),
-            ui.div("원", class_="metric-label"),
-            class_="metric-card"
-        )
-    
+    @render.text
+    def rt_power_cost():
+        val = filtered_data()["전기요금"].iloc[-1] if not filtered_data().empty else 0
+        return f"₩{val:,.0f}"
+
     @output
-    @render.ui
-    def card_co2():
-        data = filtered_data()
-        current_co2 = data['탄소배출량'].iloc[-1] if len(data) > 0 else 0
-        return ui.div(
-            ui.div(f"{current_co2:,.0f}", class_="metric-value"),
-            ui.div("CO2", class_="metric-label"),
-            class_="metric-card"
-        )
-    
+    @render.text
+    def rt_carbon_emission():
+        val = filtered_data()["탄소배출량"].iloc[-1] if not filtered_data().empty else 0
+        return f"{val:,.1f} tCO₂"
+
     @output
-    @render.ui
-    def card_pf():
-        return ui.div(
-            ui.div("0.95", class_="metric-value"),
-            ui.div("PF", class_="metric-label"),
-            class_="metric-card"
-        )
-    
-    @output
-    @render.ui
-    def card_work_type():
-        data = filtered_data()
-        dominant_type = data['작업유형'].mode().iloc[0] if len(data) > 0 else "N/A"
-        return ui.div(
-            ui.div(dominant_type, class_="metric-value", style="font-size: 18px;"),
-            ui.div("작업유형", class_="metric-label"),
-            class_="metric-card"
-        )
-    
-    @output
-    @render.ui
-    def card_weather():
-        return ui.div(
-            ui.div("31°C", class_="metric-value"),
-            ui.div("날씨", class_="metric-label"),
-            class_="metric-card"
-        )
-    
-    # [B] 실시간 그래프
+    @render.text
+    def rt_power_factor():
+        # 예시로 고정값; 실제 계산 로직 필요 시 여기에 구현
+        return "0.95"
+
     @output
     @render_widget
     def realtime_chart():
         data = filtered_data()
-        if len(data) == 0:
+        if data.empty:
             return None
-        
-        # 시간별 데이터 샘플링 (너무 많은 데이터 포인트 방지)
-        data_sampled = data.iloc[::max(1, len(data)//100)]
-        
+        sample = data.iloc[:: max(1, len(data)//100)]
         fig = go.Figure()
-        
-        if input.chart_type() == "line":
-            if "전력사용량" in input.metrics_select():
-                fig.add_trace(go.Scatter(
-                    x=data_sampled['측정일시'],
-                    y=data_sampled['전력사용량'],
-                    mode='lines',
-                    name='전력사용량 (kWh)',
-                    line=dict(color='#3498db', width=2)
-                ))
-            
-            if "전기요금" in input.metrics_select():
-                fig.add_trace(go.Scatter(
-                    x=data_sampled['측정일시'],
-                    y=data_sampled['전기요금'],
-                    mode='lines',
-                    name='전기요금 (원)',
-                    yaxis='y2',
-                    line=dict(color='#e74c3c', width=2)
-                ))
-        
+        if "전력사용량" in input.metrics_select():
+            fig.add_trace(go.Scatter(
+                x=sample["측정일시"], y=sample["전력사용량"],
+                mode="lines", name="전력사용량"
+            ))
+        if "전기요금" in input.metrics_select():
+            fig.add_trace(go.Scatter(
+                x=sample["측정일시"], y=sample["전기요금"],
+                mode="lines", name="전기요금", yaxis="y2"
+            ))
         fig.update_layout(
-            title="실시간 전력사용량 및 전기요금 추이",
+            title="실시간 전력사용량 & 전기요금",
             xaxis_title="시간",
-            yaxis=dict(title="전력사용량 (kWh)", side="left"),
-            yaxis2=dict(title="전기요금 (원)", side="right", overlaying="y"),
-            height=400,
-            hovermode='x unified'
+            yaxis=dict(title="kWh", side="left"),
+            yaxis2=dict(title="원", overlaying="y", side="right"),
+            hovermode="x unified", height=400
         )
-        
         return fig
-    
-    # [C] 진행률 바들
+
     @output
     @render.ui
     def power_progress_bars():
         data = filtered_data()
-        
-        # 일/주/월 누적 계산
-        daily_power = data.groupby(data['측정일시'].dt.date)['전력사용량'].sum().tail(7)
-        weekly_power = daily_power.sum()
-        monthly_power = data.groupby(data['측정일시'].dt.to_period('M'))['전력사용량'].sum().iloc[-1] if len(data) > 0 else 0
-        
-        return ui.div(
-            ui.div(
-                ui.div(
-                    ui.div(f"일일 누적: {daily_power.iloc[-1]:,.0f} kWh", style="font-weight: bold;"),
-                    ui.div(style=f"width: {min(100, daily_power.iloc[-1]/1000)}%; height: 8px; background: linear-gradient(90deg, #3498db, #2ecc71); border-radius: 4px; margin: 5px 0;"),
-                    style="margin: 10px 0; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                ),
-                ui.div(
-                    ui.div(f"주별 누적: {weekly_power:,.0f} kWh", style="font-weight: bold;"),
-                    ui.div(style=f"width: {min(100, weekly_power/5000)}%; height: 8px; background: linear-gradient(90deg, #9b59b6, #8e44ad); border-radius: 4px; margin: 5px 0;"),
-                    style="margin: 10px 0; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                ),
-                ui.div(
-                    ui.div(f"월별 누적: {monthly_power:,.0f} kWh", style="font-weight: bold;"),
-                    ui.div(style=f"width: {min(100, monthly_power/20000)}%; height: 8px; background: linear-gradient(90deg, #e67e22, #d35400); border-radius: 4px; margin: 5px 0;"),
-                    style="margin: 10px 0; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                )
+        if data.empty:
+            return ui.div("데이터 없음")
+        daily   = data.groupby(data["측정일시"].dt.date)["전력사용량"].sum().tail(7)
+        weekly  = daily.sum()
+        monthly = data.groupby(data["측정일시"].dt.to_period("M"))["전력사용량"].sum().iloc[-1]
+        def bar(label, val, denom):
+            pct = min(100, val/denom*100)
+            return ui.div(
+                ui.div(f"{label}: {val:,.0f}", style="font-weight:bold;"),
+                ui.div(style=f"width:{pct}%;height:8px;background:#3498db;border-radius:4px;"),
+                style="margin:10px 0; padding:10px; background:white; border-radius:8px;"
             )
+        return ui.div(
+            bar("일일 누적", daily.iloc[-1], 1000),
+            bar("주별 누적", weekly,      5000),
+            bar("월별 누적", monthly,    20000)
         )
-    
+
     @output
     @render.ui
     def cost_progress_bars():
         data = filtered_data()
-        
-        # 일/주/월 누적 계산
-        daily_cost = data.groupby(data['측정일시'].dt.date)['전기요금'].sum().tail(7)
-        weekly_cost = daily_cost.sum()
-        monthly_cost = data.groupby(data['측정일시'].dt.to_period('M'))['전기요금'].sum().iloc[-1] if len(data) > 0 else 0
-        
-        return ui.div(
-            ui.div(
-                ui.div(
-                    ui.div(f"일일 누적: ₩{daily_cost.iloc[-1]:,.0f}", style="font-weight: bold;"),
-                    ui.div(style=f"width: {min(100, daily_cost.iloc[-1]/500000)}%; height: 8px; background: linear-gradient(90deg, #27ae60, #229954); border-radius: 4px; margin: 5px 0;"),
-                    style="margin: 10px 0; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                    ),
-                ui.div(
-                    ui.div(f"주별 누적: ₩{weekly_cost:,.0f}", style="font-weight: bold;"),
-                    ui.div(style=f"width: {min(100, weekly_cost/2000000)}%; height: 8px; background: linear-gradient(90deg, #f39c12, #e67e22); border-radius: 4px; margin: 5px 0;"),
-                    style="margin: 10px 0; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                ),
-                ui.div(
-                    ui.div(f"월별 누적: ₩{monthly_cost:,.0f}", style="font-weight: bold;"),
-                    ui.div(style=f"width: {min(100, monthly_cost/8000000)}%; height: 8px; background: linear-gradient(90deg, #c0392b, #a93226); border-radius: 4px; margin: 5px 0;"),
-                    style="margin: 10px 0; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                )
+        if data.empty:
+            return ui.div("데이터 없음")
+        daily   = data.groupby(data["측정일시"].dt.date)["전기요금"].sum().tail(7)
+        weekly  = daily.sum()
+        monthly = data.groupby(data["측정일시"].dt.to_period("M"))["전기요금"].sum().iloc[-1]
+        def bar(label, val, denom):
+            pct = min(100, val/denom*100)
+            return ui.div(
+                ui.div(f"{label}: ₩{val:,.0f}", style="font-weight:bold;"),
+                ui.div(style=f"width:{pct}%;height:8px;background:#27ae60;border-radius:4px;"),
+                style="margin:10px 0; padding:10px; background:white; border-radius:8px;"
             )
+        return ui.div(
+            bar("일일 누적", daily.iloc[-1],  500000),
+            bar("주별 누적", weekly,         2000000),
+            bar("월별 누적", monthly,        8000000)
         )
-    
-    # [D] 작업 유형 분포 차트
+
     @output
-    @render.plot
+    @render_widget
     def work_type_chart():
         data = filtered_data()
-        if len(data) == 0:
+        if data.empty:
             return None
-        
-        # 시간대별 작업 유형 분포
-        hourly_work = data.groupby([data['측정일시'].dt.hour, '작업유형']).size().unstack(fill_value=0)
-        
+        hourly = data.groupby([data["측정일시"].dt.hour, "작업유형"]).size().unstack(fill_value=0)
         fig = go.Figure()
-        
-        for work_type in hourly_work.columns:
-            fig.add_trace(go.Bar(
-                x=hourly_work.index,
-                y=hourly_work[work_type],
-                name=work_type,
-                text=hourly_work[work_type],
-                textposition='auto'
-            ))
-        
+        for t in hourly.columns:
+            fig.add_trace(go.Bar(x=hourly.index, y=hourly[t], name=t))
         fig.update_layout(
             title="시간대별 작업 유형 분포",
-            xaxis_title="시간",
-            yaxis_title="빈도",
-            barmode='stack',
-            height=300
+            xaxis_title="시간", yaxis_title="건수", barmode="stack", height=300
         )
-        
         return fig
-    
+
     @output
-    @render.plot
+    @render_widget
     def work_type_pie():
         data = filtered_data()
-        if len(data) == 0:
+        if data.empty:
             return None
-        
-        work_type_counts = data['작업유형'].value_counts()
-        
-        fig = px.pie(
-            values=work_type_counts.values,
-            names=work_type_counts.index,
-            title="작업유형별 분포"
-        )
-        
-        fig.update_layout(height=300)
+        counts = data["작업유형"].value_counts()
+        fig = px.pie(values=counts.values, names=counts.index, title="작업유형별 분포", hole=0.4, height=300)
         return fig
+
+    # ─────────────────────────────────────────────────────────
+    # TAB 2: 분석 보고서 출력
+    # ─────────────────────────────────────────────────────────
+    @output
+    @render.text
+    def summary_power_usage():
+        d = get_filtered_data_by_period()
+        total = d["전력사용량"].sum() if not d.empty else 0
+        return f"{total:,.1f} kWh"
+
+    @output
+    @render.text
+    def summary_power_cost():
+        d = get_filtered_data_by_period()
+        total = d["전기요금"].sum() if not d.empty else 0
+        return f"₩{total:,.0f}"
+
+    @output
+    @render.text
+    def summary_carbon_emission():
+        d = get_filtered_data_by_period()
+        total = d["탄소배출량"].sum() if not d.empty else 0
+        return f"{total:,.1f} tCO₂"
+
+    @output
+    @render.text
+    def summary_power_factor():
+        d = get_filtered_data_by_period()
+        avg = d["역률"].mean() if ("역률" in d.columns and not d.empty) else 0
+        return f"{avg:.2f}"
+
+    @output
+    @render_widget
+    def cost_trend_chart():
+        d = get_filtered_data_by_period()
+        if d.empty:
+            fig = go.Figure(); fig.add_annotation(text="데이터 없음", x=0.5, y=0.5, showarrow=False)
+            return fig
+        hourly = (
+            d.groupby(d["측정일시"].dt.floor("H"))["전기요금"]
+             .agg(["sum","mean"])
+             .reset_index()
+        )
+        hourly.columns = ["시간","누적요금","평균요금"]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=hourly["시간"], y=hourly["누적요금"], name="누적요금", opacity=0.7))
+        fig.add_trace(go.Scatter(x=hourly["시간"], y=hourly["평균요금"],
+                                 mode="lines+markers", name="평균요금"))
+        fig.update_layout(title="전기요금 시계열 분석", xaxis_title="시간", yaxis_title="원", hovermode="x unified")
+        return fig
+
+    @output
+    @render.text
+    def peak_cost_info():
+        d = get_filtered_data_by_period()
+        if d.empty:
+            return "데이터 없음"
+        idx      = d["전기요금"].idxmax()
+        cost     = d.loc[idx, "전기요금"]
+        dt       = d.loc[idx, "측정일시"]
+        weekday  = dt.strftime("%A")
+        return f"최고요금: ₩{cost:,.0f}\n발생일시: {dt:%Y-%m-%d %H:%M}\n요일: {weekday}"
+
+    @output
+    @render.text
+    def avg_carbon_info():
+        d = get_filtered_data_by_period()
+        if d.empty:
+            return "데이터 없음"
+        avg = d["탄소배출량"].mean()
+        tot = d["탄소배출량"].sum()
+        return f"평균: {avg:.1f} tCO₂\n총 배출량: {tot:.1f} tCO₂"
+
+    @output
+    @render.text
+    def main_work_type_info():
+        d = get_filtered_data_by_period()
+        if d.empty or "작업유형" not in d.columns:
+            return "데이터 없음"
+        vc  = d["작업유형"].value_counts()
+        top = vc.idxmax(); cnt = vc.max(); tot = vc.sum()
+        return f"최다 작업유형: {top}\n비중: {cnt/tot*100:.1f}% ({cnt}건)"
+
+    @output
+    @render.text
+    def monthly_change_info():
+        d = get_filtered_data_by_period()
+        if d.empty:
+            return "데이터 없음"
+        cur_sum = d["전기요금"].sum()
+        prev_cutoff = d["측정일시"].min() - timedelta(days=30)
+        prev = df[(df["측정일시"] < d["측정일시"].min()) &
+                  (df["측정일시"] >= prev_cutoff)]
+        prev_sum = prev["전기요금"].sum() if not prev.empty else cur_sum
+        rate = (cur_sum - prev_sum) / prev_sum * 100 if prev_sum else 0
+        return f"{rate:+.1f}%"
+
 
 # 앱 실행
 app = App(app_ui, server)
