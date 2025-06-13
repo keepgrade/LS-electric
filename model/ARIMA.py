@@ -1,15 +1,5 @@
-"""Optimal model for LS electric electricity bill prediction.
-
-This script combines advanced preprocessing steps with multiple models:
-- LSTM on 96x7 time windows
-- Tree based models (XGB, LightGBM, RandomForest)
-- Optional SARIMAX if statsmodels is installed
-
-The final prediction is an ensemble of the available models.
-"""
 
 import os
-import pickle
 from datetime import datetime
 
 import numpy as np
@@ -34,9 +24,10 @@ from tensorflow.keras.callbacks import EarlyStopping
 # ----------------------------------------------------------------------
 # 1. Load data
 # ----------------------------------------------------------------------
-BASE_DIR = "./data"
+BASE_DIR = "../data"
 train_df = pd.read_csv(os.path.join(BASE_DIR, "train.csv"))
 test_df = pd.read_csv(os.path.join(BASE_DIR, "test.csv"))
+print("✔️ [1] 데이터 로딩 중...")
 
 # ----------------------------------------------------------------------
 # 2. Datetime features
@@ -50,6 +41,8 @@ for df in [train_df, test_df]:
     df["주말여부"] = (df["요일"] >= 5).astype(int)
     df["sin_시간"] = np.sin(2 * np.pi * df["시간"] / 24)
     df["cos_시간"] = np.cos(2 * np.pi * df["시간"] / 24)
+
+print("✔️ [2] 날짜 변수 처리 중...")
 
 # ----------------------------------------------------------------------
 # 3. Tariff calculation
@@ -97,9 +90,14 @@ for df in [train_df, test_df]:
     df["시간대"] = df.apply(lambda r: get_time_zone(r["시간"], r["계절"]), axis=1)
     df["요금단가"] = df.apply(lambda r: RATE_TABLE[r["적용시점"]][r["계절"]][r["시간대"]], axis=1)
 
+print("✔️ [3] 계절/시간대/요금단가 처리 중...")
+
 # ----------------------------------------------------------------------
 # 4. Encoding and target encoding
 # ----------------------------------------------------------------------
+
+print("✔️ [4] 라벨 인코딩 및 타겟 인코딩 중...")
+
 le = LabelEncoder()
 train_df["작업유형_encoded"] = le.fit_transform(train_df["작업유형"])
 test_df["작업유형_encoded"] = le.transform(test_df["작업유형"])
@@ -118,9 +116,12 @@ def target_encoding(df_train: pd.DataFrame, df_test: pd.DataFrame, col: str, tar
 for c in ["작업유형", "시간", "요일", "시간대"]:
     target_encoding(train_df, test_df, c, "전기요금(원)")
 
+
 # ----------------------------------------------------------------------
 # 5. Outlier removal with IQR
 # ----------------------------------------------------------------------
+print("✔️ [5] 이상치 제거 중...")
+
 q1 = train_df["전기요금(원)"].quantile(0.25)
 q3 = train_df["전기요금(원)"].quantile(0.75)
 iqr = q3 - q1
@@ -131,6 +132,8 @@ train_df = train_df[(train_df["전기요금(원)"] >= lower) & (train_df["전기
 # ----------------------------------------------------------------------
 # 6. Feature selection
 # ----------------------------------------------------------------------
+print("✔️ [6] 피처 선택 및 정의 완료")
+
 FEATURES = [
     "작업유형_encoded",
     "월", "일", "시간", "요일", "주말여부",
@@ -147,6 +150,8 @@ X_test = test_df[FEATURES]
 # ----------------------------------------------------------------------
 # 7. Scaling
 # ----------------------------------------------------------------------
+print("✔️ [7] 스케일링 적용 중 (RobustScaler)...")
+
 scaler = RobustScaler()
 X_scaled = scaler.fit_transform(X)
 X_test_scaled = scaler.transform(X_test)
@@ -154,6 +159,8 @@ X_test_scaled = scaler.transform(X_test)
 # ----------------------------------------------------------------------
 # 8. Tree based models
 # ----------------------------------------------------------------------
+print("✔️ [8] 트리 기반 모델 학습 시작")
+
 X_train, X_val, y_train, y_val = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
 models = {
@@ -166,33 +173,36 @@ preds_val = {}
 preds_test = {}
 metrics = {}
 
-print("Training tree models...")
-n_models = len(models)
-for idx, (name, model) in enumerate(models.items(), 1):
-    print(f"[{idx}/{n_models}] {name} start")
+for name, model in models.items():
+    print(f"  🔁 {name.upper()} 모델 학습 중...")
     model.fit(X_train, y_train)
+    print(f"  ✅ {name.upper()} 학습 완료, R2: {r2_score(y_val, model.predict(X_val)):.4f}")
     val_pred = model.predict(X_val)
     preds_test[name] = model.predict(X_test_scaled)
     preds_val[name] = val_pred
     metrics[name] = r2_score(y_val, val_pred)
-    print(f"[{idx}/{n_models}] {name} done")
 
 # ----------------------------------------------------------------------
 # 9. Optional SARIMAX
 # ----------------------------------------------------------------------
+print("✔️ [9] SARIMAX 학습 시도 중...")
 if STATS_AVAILABLE:
+    print("  🔁 SARIMAX 모델 학습 시작")
     sarimax = SARIMAX(y, exog=X_scaled, order=(1,1,1), seasonal_order=(1,1,1,24))
     sarimax_fit = sarimax.fit(disp=False)
     val_pred = sarimax_fit.predict(start=len(y_train), end=len(y_train)+len(y_val)-1, exog=X_val)
     preds_val["sarimax"] = val_pred
     preds_test["sarimax"] = sarimax_fit.predict(start=len(X_scaled), end=len(X_scaled)+len(X_test_scaled)-1, exog=X_test_scaled)
     metrics["sarimax"] = r2_score(y_val, val_pred)
+    print(f"  ✅ SARIMAX R2: {metrics['sarimax']:.4f}")
 else:
     print("statsmodels not available - skipping SARIMAX")
 
 # ----------------------------------------------------------------------
 # 10. LSTM model
 # ----------------------------------------------------------------------
+print("✔️ [10] LSTM 시퀀스 데이터 준비 중...")
+
 TIME_STEPS = 96 * 7
 
 seq_scaler = MinMaxScaler()
@@ -212,6 +222,8 @@ seq_train, seq_val = int(len(X_seq) * 0.8), int(len(X_seq) * 0.8)
 X_seq_train, X_seq_val = X_seq[:seq_train], X_seq[seq_train:]
 y_seq_train, y_seq_val = y_seq[:seq_train], y_seq[seq_train:]
 
+print("  🔁 LSTM 모델 학습 시작 (최대 20 epoch)...")
+
 lstm_model = Sequential([
     LSTM(64, input_shape=(TIME_STEPS, len(FEATURES))),
     Dense(32, activation="relu"),
@@ -220,19 +232,12 @@ lstm_model = Sequential([
 lstm_model.compile(optimizer="adam", loss="mse")
 
 es = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
-print("Training LSTM model...")
-lstm_model.fit(
-    X_seq_train,
-    y_seq_train,
-    validation_data=(X_seq_val, y_seq_val),
-    epochs=20,
-    batch_size=32,
-    callbacks=[es],
-    verbose=1,
-)
+lstm_model.fit(X_seq_train, y_seq_train, validation_data=(X_seq_val, y_seq_val), epochs=20, batch_size=32, callbacks=[es], verbose=0)
 
 val_pred = lstm_model.predict(X_seq_val).flatten()
 metrics["lstm"] = r2_score(y_seq_val, val_pred)
+
+print(f"  ✅ LSTM R2: {metrics['lstm']:.4f}")
 
 def predict_lstm(model, last_known: pd.DataFrame, future: pd.DataFrame) -> np.ndarray:
     combined = pd.concat([last_known, future], ignore_index=True)
@@ -243,6 +248,7 @@ def predict_lstm(model, last_known: pd.DataFrame, future: pd.DataFrame) -> np.nd
     preds = model.predict(seqs).flatten()
     return preds[-len(future):]
 
+
 last_part = train_df[FEATURES + [TARGET]].iloc[-TIME_STEPS:]
 lstm_test_pred = predict_lstm(lstm_model, last_part, test_df[FEATURES])
 
@@ -252,6 +258,8 @@ preds_val["lstm"] = val_pred
 # ----------------------------------------------------------------------
 # 11. Weighted ensemble
 # ----------------------------------------------------------------------
+print("✔️ [11] 앙상블 가중치 계산 중...")
+
 weights = {name: max(score, 0) for name, score in metrics.items()}
 total = sum(weights.values())
 if total == 0:
@@ -273,30 +281,4 @@ for name, pred in preds_test.items():
 
 submission = pd.DataFrame({"id": test_df["id"], "전기요금(원)": test_pred})
 submission.to_csv("submission_optimal.csv", index=False)
-submission.to_csv("submission.csv", index=False)
-print("Saved submission_optimal.csv and submission.csv")
-
-# ----------------------------------------------------------------------
-# 12. Save trained models
-# ----------------------------------------------------------------------
-MODELS_DIR = "pickles"
-os.makedirs(MODELS_DIR, exist_ok=True)
-print("Saving trained models...")
-for name, model in models.items():
-    with open(os.path.join(MODELS_DIR, f"{name}.pkl"), "wb") as f:
-        pickle.dump(model, f)
-    print(f"Saved {name}.pkl")
-if STATS_AVAILABLE:
-    with open(os.path.join(MODELS_DIR, "sarimax.pkl"), "wb") as f:
-        pickle.dump(sarimax_fit, f)
-    print("Saved sarimax.pkl")
-with open(os.path.join(MODELS_DIR, "lstm.pkl"), "wb") as f:
-    pickle.dump(lstm_model, f)
-print("Saved lstm.pkl")
-with open(os.path.join(MODELS_DIR, "scaler.pkl"), "wb") as f:
-    pickle.dump(scaler, f)
-print("Saved scaler.pkl")
-with open(os.path.join(MODELS_DIR, "seq_scaler.pkl"), "wb") as f:
-    pickle.dump(seq_scaler, f)
-print("Saved seq_scaler.pkl")
-print(f"Saved trained models to {MODELS_DIR}")
+print("Saved submission_optimal.csv")
