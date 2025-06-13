@@ -9,6 +9,7 @@ The final prediction is an ensemble of the available models.
 """
 
 import os
+import pickle
 from datetime import datetime
 
 import numpy as np
@@ -33,7 +34,7 @@ from tensorflow.keras.callbacks import EarlyStopping
 # ----------------------------------------------------------------------
 # 1. Load data
 # ----------------------------------------------------------------------
-BASE_DIR = "./data"
+BASE_DIR = "../data"
 train_df = pd.read_csv(os.path.join(BASE_DIR, "train.csv"))
 test_df = pd.read_csv(os.path.join(BASE_DIR, "test.csv"))
 
@@ -164,12 +165,17 @@ models = {
 preds_val = {}
 preds_test = {}
 metrics = {}
-for name, model in models.items():
+
+print("Training tree models...")
+n_models = len(models)
+for idx, (name, model) in enumerate(models.items(), 1):
+    print(f"[{idx}/{n_models}] {name} start")
     model.fit(X_train, y_train)
     val_pred = model.predict(X_val)
     preds_test[name] = model.predict(X_test_scaled)
     preds_val[name] = val_pred
     metrics[name] = r2_score(y_val, val_pred)
+    print(f"[{idx}/{n_models}] {name} done")
 
 # ----------------------------------------------------------------------
 # 9. Optional SARIMAX
@@ -214,7 +220,16 @@ lstm_model = Sequential([
 lstm_model.compile(optimizer="adam", loss="mse")
 
 es = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
-lstm_model.fit(X_seq_train, y_seq_train, validation_data=(X_seq_val, y_seq_val), epochs=20, batch_size=32, callbacks=[es], verbose=0)
+print("Training LSTM model...")
+lstm_model.fit(
+    X_seq_train,
+    y_seq_train,
+    validation_data=(X_seq_val, y_seq_val),
+    epochs=20,
+    batch_size=32,
+    callbacks=[es],
+    verbose=1,
+)
 
 val_pred = lstm_model.predict(X_seq_val).flatten()
 metrics["lstm"] = r2_score(y_seq_val, val_pred)
@@ -244,18 +259,57 @@ if total == 0:
 else:
     weights = {name: w/total for name, w in weights.items()}
 
-val_ens = np.zeros_like(list(preds_val.values())[0])
+# Determine correct validation target
+is_seq = "lstm" in preds_val
+y_true = y_seq_val if is_seq else y_val
+target_len = len(y_true)
+
+# Initialize
+val_ens = np.zeros(target_len)
+
+# Ensemble
 for name, pred in preds_val.items():
+    if len(pred) != target_len:
+        print(f"⚠️ {name} prediction length mismatch: {len(pred)} vs {target_len}")
+        continue
     val_ens += weights[name] * pred
 
-ens_r2 = r2_score(y_seq_val if "lstm" in preds_val else y_val, val_ens)
-print("Ensemble R2:", round(ens_r2, 4))
+# Evaluate
+ens_r2 = r2_score(y_true, val_ens)
+print("✅ Ensemble R2:", round(ens_r2, 4))
 
 # Test prediction
 test_pred = np.zeros(len(test_df))
 for name, pred in preds_test.items():
     test_pred += weights[name] * pred
 
+
 submission = pd.DataFrame({"id": test_df["id"], "전기요금(원)": test_pred})
 submission.to_csv("submission_optimal.csv", index=False)
-print("Saved submission_optimal.csv")
+submission.to_csv("submission.csv", index=False)
+print("Saved submission_optimal.csv and submission.csv")
+
+# ----------------------------------------------------------------------
+# 12. Save trained models
+# ----------------------------------------------------------------------
+MODELS_DIR = "pickles"
+os.makedirs(MODELS_DIR, exist_ok=True)
+print("Saving trained models...")
+for name, model in models.items():
+    with open(os.path.join(MODELS_DIR, f"{name}.pkl"), "wb") as f:
+        pickle.dump(model, f)
+    print(f"Saved {name}.pkl")
+if STATS_AVAILABLE:
+    with open(os.path.join(MODELS_DIR, "sarimax.pkl"), "wb") as f:
+        pickle.dump(sarimax_fit, f)
+    print("Saved sarimax.pkl")
+with open(os.path.join(MODELS_DIR, "lstm.pkl"), "wb") as f:
+    pickle.dump(lstm_model, f)
+print("Saved lstm.pkl")
+with open(os.path.join(MODELS_DIR, "scaler.pkl"), "wb") as f:
+    pickle.dump(scaler, f)
+print("Saved scaler.pkl")
+with open(os.path.join(MODELS_DIR, "seq_scaler.pkl"), "wb") as f:
+    pickle.dump(seq_scaler, f)
+print("Saved seq_scaler.pkl")
+print(f"Saved trained models to {MODELS_DIR}")
