@@ -34,7 +34,7 @@ from tensorflow.keras.callbacks import EarlyStopping
 # ----------------------------------------------------------------------
 # 1. Load data
 # ----------------------------------------------------------------------
-BASE_DIR = "./data"
+BASE_DIR = "../data"
 train_df = pd.read_csv(os.path.join(BASE_DIR, "train.csv"))
 test_df = pd.read_csv(os.path.join(BASE_DIR, "test.csv"))
 
@@ -259,17 +259,30 @@ if total == 0:
 else:
     weights = {name: w/total for name, w in weights.items()}
 
-val_ens = np.zeros_like(list(preds_val.values())[0])
+# Determine correct validation target
+is_seq = "lstm" in preds_val
+y_true = y_seq_val if is_seq else y_val
+target_len = len(y_true)
+
+# Initialize
+val_ens = np.zeros(target_len)
+
+# Ensemble
 for name, pred in preds_val.items():
+    if len(pred) != target_len:
+        print(f"⚠️ {name} prediction length mismatch: {len(pred)} vs {target_len}")
+        continue
     val_ens += weights[name] * pred
 
-ens_r2 = r2_score(y_seq_val if "lstm" in preds_val else y_val, val_ens)
-print("Ensemble R2:", round(ens_r2, 4))
+# Evaluate
+ens_r2 = r2_score(y_true, val_ens)
+print("✅ Ensemble R2:", round(ens_r2, 4))
 
 # Test prediction
 test_pred = np.zeros(len(test_df))
 for name, pred in preds_test.items():
     test_pred += weights[name] * pred
+
 
 submission = pd.DataFrame({"id": test_df["id"], "전기요금(원)": test_pred})
 submission.to_csv("submission_optimal.csv", index=False)
