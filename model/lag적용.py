@@ -15,6 +15,9 @@ from xgboost import XGBRegressor
 train_df = pd.read_csv("data/train.csv")
 test_df = pd.read_csv("data/test.csv")
 
+train_df.head()
+test_df.head()
+
 # ================================
 # 🧼 3. 공통 전처리 함수 정의
 # ================================
