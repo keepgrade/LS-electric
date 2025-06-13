@@ -313,3 +313,44 @@ with open(os.path.join(MODELS_DIR, "seq_scaler.pkl"), "wb") as f:
     pickle.dump(seq_scaler, f)
 print("Saved seq_scaler.pkl")
 print(f"Saved trained models to {MODELS_DIR}")
+
+
+
+
+MULTI_TARGETS = [
+    "전력사용량(kWh)",
+    "지상무효전력량(kVarh)",
+    "진상무효전력량(kVarh)",
+    "탄소배출량(tCO2)",
+    "지상역률(%)",
+    "진상역률(%)",
+    "전기요금(원)"
+]
+
+# test_df 생성 및 파생 변수 포함 완료된 상태라고 가정
+test_pred_dict = {}
+
+for target in MULTI_TARGETS:
+    print(f"🔍 [{target}] 예측 중...")
+    
+    # 학습용 데이터 구성
+    y_multi = train_df[target]
+    X_train, X_val, y_train, y_val = train_test_split(X_scaled, y_multi, test_size=0.2, random_state=42)
+
+    # 모델 훈련 (여기선 LightGBM 사용 예시)
+    model = LGBMRegressor(n_estimators=300, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # 예측 결과 저장
+    y_test_pred = model.predict(X_test_scaled)
+    test_pred_dict[target] = y_test_pred
+    print(f"✅ [{target}] 예측 완료")
+
+for target, pred in test_pred_dict.items():
+    test_df[target] = pred
+
+
+# id, 측정일시, 작업유형 + 예측된 피처들 저장
+final_output = test_df[["id", "측정일시", "작업유형"] + MULTI_TARGETS]
+final_output.to_csv("test_predicted_december_data.csv", index=False)
+print("test_predicted_december_data.csv 저장 완료 (멀티타깃 예측 포함)")
