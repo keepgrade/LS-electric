@@ -1094,7 +1094,7 @@ def server(input, output, session):
     def monthly_change_info():
         d = summary_data()
         if d.empty:
-            return "데이터 없음"
+            return "데이터 없음" ###
 
         cur_sum = d["전기요금(원)"].sum()
         min_date = d["측정일시"].min()
