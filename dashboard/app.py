@@ -50,8 +50,11 @@ def load_data():
 
 df = load_data()
 
+<<<<<<< HEAD
+=======
 
 
+>>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
 class Streamer:
     def __init__(self, df):
         self.df = df.sort_values("측정일시").reset_index(drop=True)
@@ -79,6 +82,18 @@ class Accumulator:
         return self.df.copy()
 
 
+<<<<<<< HEAD
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+test_df = pd.read_csv(os.path.join(os.path.dirname(__file__), '..', 'data', 'test_predicted_december_data.csv'))
+test_df["측정일시"] = pd.to_datetime(test_df["측정일시"])  # 반드시 datetime으로 변환
+
+
+
+print("✅ test_df info")
+print(test_df.info())      # dtype, 결측치, 행수 확인
+print(test_df.head())      # 샘플 확인
+
+=======
 # 기준값 계산 함수
 def get_november_baseline(train_df):
     nov_df = train_df[
@@ -127,6 +142,7 @@ if "탄소배출량(tCO2)" in train_df.columns:
 nov_baseline = get_november_baseline(train_df)
 
 
+>>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
 # ✅ 컬럼명 일괄 매핑
 if "전력사용량(kWh)" in test_df.columns:
     test_df["전력사용량"] = test_df["전력사용량(kWh)"]
@@ -253,12 +269,15 @@ app_ui = ui.page_navbar(
                         },
                         selected="line"
                     ),
+<<<<<<< HEAD
+=======
                     ui.br(),
                     ui.input_slider(
                         "update_interval",
                         "🔄 업데이트 간격 (초):",
                         min=0.1, max=5, value=1, step=0.1
                     ),
+>>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
                     class_="sidebar-custom"
                 ),
                 width=300
@@ -295,7 +314,12 @@ app_ui = ui.page_navbar(
                                         end=test_df["측정일시"].max().strftime("%Y-%m-%d")
                                     ),
                                     ui.br(),
+<<<<<<< HEAD
+                                    ui.input_action_button("toggle_streaming", "⏯️ 스트리밍 시작 / 중지", class_="btn btn-primary"),
+                                    ui.input_action_button("update_chart", "예측시작", class_="btn-primary"),
+=======
                                     ui.input_action_button("update_chart", "예측 시작", class_="btn-primary"),
+>>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
                                     style="padding: 20px;"
                                 )
                             )
@@ -447,6 +471,15 @@ ui.nav_panel(
 )
 
 def server(input, output, session):
+<<<<<<< HEAD
+    @reactive.effect
+    def toggle_streaming_state():
+        if input.toggle_streaming():
+            current = is_streaming.get()
+            is_streaming.set(not current)
+            print(f"🚦 스트리밍 {'시작' if not current else '중지'}됨")
+
+=======
     # ───────────────────────────────────────────────────────
     # 0) FigureWidget 초기화 (한 번만)
     # ───────────────────────────────────────────────────────
@@ -468,10 +501,15 @@ def server(input, output, session):
     legend=dict(orientation="h", y=-0.2)
 )
     
+>>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
 
     # ───────────────────────────────────────────────────────
     # 1) Reactive 데이터 준비 (분석 보고서 탭)
     # ───────────────────────────────────────────────────────
+<<<<<<< HEAD
+
+=======
+>>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
     @reactive.Calc
     def summary_data():
         # 📂 CSV 로드
@@ -589,6 +627,110 @@ def server(input, output, session):
             fig_realtime.data[0].x = x
             fig_realtime.data[0].y = d["전력사용량"].tolist()
         else:
+<<<<<<< HEAD
+            cutoff = now - timedelta(days=1)
+        return df[df["측정일시"] >= cutoff].copy()
+    
+    streamer = reactive.Value(Streamer(test_df))
+    accumulator = reactive.Value(Accumulator())
+    is_streaming = reactive.Value(True)
+    current_data = reactive.Value(pd.DataFrame())
+
+
+
+    @reactive.effect
+    def stream_data():
+        try:
+            if not is_streaming.get():
+                return
+
+            # ⏱️ 업데이트 간격 (초 단위)
+            interval_sec = input.update_interval() if hasattr(input, "update_interval") else 1
+            reactive.invalidate_later(interval_sec)
+
+            s = streamer.get()
+            next_batch = s.get_next_batch(1)
+
+            if next_batch is not None:
+                accumulator.get().accumulate(next_batch)
+                current_data.set(accumulator.get().get())
+                print(f"📡 Streaming: index={s.index}, batch={len(next_batch)}")
+            else:
+                print("✅ 스트리밍 완료")
+                is_streaming.set(False)
+
+        except Exception as e:
+            print("⛔ 오류 발생:", e)
+            is_streaming.set(False)
+
+    # ───────────────────────────────────────────────────────
+    # 2) [A] 요약 카드 (실시간 탭)
+    # ───────────────────────────────────────────────────────
+    @output
+    @render.ui
+    def card_power():
+        d = simulated_data()
+        val = d["전력사용량"].iloc[-1] if not d.empty else 0
+        return ui.div(
+            ui.div(f"{val:,.0f}", class_="metric-value"),
+            ui.div("kWh", class_="metric-label"),
+            class_="metric-card",
+        )
+
+    @output
+    @render.ui
+    def card_cost():
+        d = simulated_data()
+        val = d["전기요금"].iloc[-1] if not d.empty else 0
+        return ui.div(
+            ui.div(f"{val:,.0f}", class_="metric-value"),
+            ui.div("원", class_="metric-label"),
+            class_="metric-card",
+        )
+
+    @output
+    @render.ui
+    def card_co2():
+        d = simulated_data()
+        val = d["탄소배출량"].iloc[-1] if not d.empty else 0
+        return ui.div(
+            ui.div(f"{val:,.0f}", class_="metric-value"),
+            ui.div("CO₂", class_="metric-label"),
+            class_="metric-card",
+        )
+
+    @output
+    @render.ui
+    def card_pf():
+        return ui.div(
+            ui.div("0.95", class_="metric-value"),
+            ui.div("PF", class_="metric-label"),
+            class_="metric-card",
+        )
+
+    @output
+    @render.ui
+    def card_work_type():
+        d = simulated_data()
+        typ = d["작업유형"].mode().iloc[0] if not d.empty else "N/A"
+        return ui.div(
+            ui.div(typ, class_="metric-value", style="font-size:18px;"),
+            ui.div("작업유형", class_="metric-label"),
+            class_="metric-card",
+        )
+
+    @output
+    @render.ui
+    def card_weather():
+        return ui.div(
+            ui.div("31°C", class_="metric-value"),
+            ui.div("날씨", class_="metric-label"),
+            class_="metric-card",
+        )
+
+    # ───────────────────────────────────────────────────────
+    # 3) [B] 실시간 그래프
+=======
             fig_realtime.data[0].x = []
             fig_realtime.data[0].y = []
 
@@ -602,10 +744,66 @@ def server(input, output, session):
 
     # ───────────────────────────────────────────────────────
     # 4) Output 정의
+>>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
     # ───────────────────────────────────────────────────────
     @output
     @render_widget
     def realtime_chart():
+<<<<<<< HEAD
+        d = simulated_data()
+        
+        if d.empty or len(d) < 2:
+            fig = go.Figure()
+            fig.add_annotation(
+                text="📭 표시할 데이터가 없습니다",
+                x=0.5, y=0.5, showarrow=False, font=dict(size=20),
+                xref="paper", yref="paper"
+            )
+            fig.update_layout(height=400)
+            return fig
+
+        # 샘플링: 최대 100개로 제한
+        sample = d.iloc[:: max(1, len(d)//100)]
+        
+        # 차트 타입 선택
+        chart_type = input.chart_type()
+        Trace = go.Scatter if chart_type == "line" else go.Bar
+
+        # 시각화 시작
+        fig = go.Figure()
+
+        if "전력사용량" in input.metrics_select():
+            fig.add_trace(Trace(
+                x=sample["측정일시"],
+                y=sample["전력사용량"],
+                name="전력사용량",
+                yaxis="y",
+                marker_color="#3498db"
+            ))
+
+        if "전기요금" in input.metrics_select():
+            fig.add_trace(Trace(
+                x=sample["측정일시"],
+                y=sample["전기요금"],
+                name="전기요금",
+                yaxis="y2",
+                marker_color="#e74c3c"
+            ))
+
+        # 레이아웃 업데이트
+        fig.update_layout(
+            title="📡 실시간 전력사용량 & 전기요금",
+            xaxis=dict(title="시간", tickformat="%m-%d %H:%M"),
+            yaxis=dict(title="전력사용량 (kWh)", side="left"),
+            yaxis2=dict(title="전기요금 (원)", overlaying="y", side="right"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            hovermode="x unified",
+            margin=dict(t=60, b=40, l=50, r=50),
+            height=400,
+        )
+
+        return fig
+=======
         # 항상 동일한 FigureWidget 반환
         return fig_realtime
 
@@ -650,6 +848,8 @@ def server(input, output, session):
     @render.ui
     def card_weather():
         return ui.div(ui.div("31°C", class_="metric-value"), ui.div("날씨", class_="metric-label"), class_="metric-card")
+
+>>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
 
 
     # ───────────────────────────────────────────────────────
