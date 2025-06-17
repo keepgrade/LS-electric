@@ -287,34 +287,33 @@ class DataProcessor:
     
     def scale_features(self, X_train: pd.DataFrame, X_test: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """피처 타입별 다른 스케일링 적용"""
-        # ✅ NaN / Inf 제거 추가
-        X_train = X_train.replace([np.inf, -np.inf], np.nan)
-        X_test = X_test.replace([np.inf, -np.inf], np.nan)
-
-        X_train = X_train.fillna(0)
-        X_test = X_test.fillna(0)
+        # ✅ NaN / Inf 제거
+        X_train = X_train.replace([np.inf, -np.inf], np.nan).fillna(0)
+        X_test = X_test.replace([np.inf, -np.inf], np.nan).fillna(0)
 
         feature_groups = self.get_feature_groups()
-        
-        # 실제 존재하는 피처만 필터링
         actual_features = X_train.columns.tolist()
-        
+
         # 동적으로 lag, rolling 피처 찾기
         for col in actual_features:
             if '_lag_' in col:
                 feature_groups['lag_features'].append(col)
             elif '_rolling_' in col or '_pct_change_' in col:
                 feature_groups['rolling_features'].append(col)
-        
-        # 실제 존재하는 피처로 필터링
+
+        # 실제 존재하는 피처만 필터링
         for group in feature_groups:
             feature_groups[group] = [f for f in feature_groups[group] if f in actual_features]
-        
+
+        # ❗ object 타입 제거 (스케일러 에러 방지)
+        for group in ['categorical_features', 'numerical_features']:
+            feature_groups[group] = [col for col in feature_groups[group] if X_train[col].dtype != 'object']
+
         scaled_train_parts = []
         scaled_test_parts = []
         feature_order = []
-        
-        # 수치형 피처 - RobustScaler
+
+        # 수치형 - RobustScaler
         if feature_groups['numerical_features']:
             self.scalers['numerical'] = RobustScaler()
             num_train = self.scalers['numerical'].fit_transform(X_train[feature_groups['numerical_features']])
@@ -322,8 +321,8 @@ class DataProcessor:
             scaled_train_parts.append(num_train)
             scaled_test_parts.append(num_test)
             feature_order.extend(feature_groups['numerical_features'])
-        
-        # 범주형 피처 - StandardScaler
+
+        # 범주형 - StandardScaler
         if feature_groups['categorical_features']:
             self.scalers['categorical'] = StandardScaler()
             cat_train = self.scalers['categorical'].fit_transform(X_train[feature_groups['categorical_features']])
@@ -331,7 +330,7 @@ class DataProcessor:
             scaled_train_parts.append(cat_train)
             scaled_test_parts.append(cat_test)
             feature_order.extend(feature_groups['categorical_features'])
-        
+
         # Lag 피처 - MinMaxScaler
         if feature_groups['lag_features']:
             self.scalers['lag'] = MinMaxScaler()
@@ -340,7 +339,7 @@ class DataProcessor:
             scaled_train_parts.append(lag_train)
             scaled_test_parts.append(lag_test)
             feature_order.extend(feature_groups['lag_features'])
-        
+
         # Rolling 피처 - RobustScaler
         if feature_groups['rolling_features']:
             self.scalers['rolling'] = RobustScaler()
@@ -349,24 +348,25 @@ class DataProcessor:
             scaled_train_parts.append(roll_train)
             scaled_test_parts.append(roll_test)
             feature_order.extend(feature_groups['rolling_features'])
-        
-        # 모든 부분 결합
+
+        # 병합
         X_train_scaled = np.hstack(scaled_train_parts) if scaled_train_parts else X_train.values
         X_test_scaled = np.hstack(scaled_test_parts) if scaled_test_parts else X_test.values
-        
+
         self.feature_order = feature_order
         return X_train_scaled, X_test_scaled
 
 class ModelEnsemble:
     """앙상블 모델 클래스"""
-    
+
     def __init__(self, config: Config):
         self.config = config
         self.base_models = {}
         self.meta_model = LinearRegression()
         self.lstm_model = None
         self.sarimax_model = None
-    
+        self.scalers = {}
+
     def create_base_models(self) -> Dict[str, Any]:
         """베이스 모델들 생성"""
         return {
@@ -385,51 +385,42 @@ class ModelEnsemble:
                 random_state=self.config.RANDOM_STATE, n_jobs=-1
             )
         }
-    
+
     def create_advanced_lstm(self, input_shape: Tuple[int, int], best_params: Dict) -> Model:
         """개선된 LSTM 아키텍처"""
         model = Sequential([
             LSTM(best_params["units1"], return_sequences=True, input_shape=input_shape),
             BatchNormalization(),
             Dropout(best_params["dropout"]),
-            
             LSTM(best_params["units2"], return_sequences=True),
-            BatchNormalization(), 
+            BatchNormalization(),
             Dropout(best_params["dropout"]),
-            
             LSTM(best_params["units3"]),
             BatchNormalization(),
             Dropout(best_params["dropout"]),
-            
             Dense(64, activation="relu"),
             BatchNormalization(),
             Dropout(0.2),
             Dense(32, activation="relu"),
             Dense(1)
         ])
-        
-        model.compile(
-            optimizer=Adam(learning_rate=best_params["lr"]),
-            loss=self.custom_loss,
-            metrics=['mae']
-        )
+        model.compile(optimizer=Adam(learning_rate=best_params["lr"]),
+                      loss=self.custom_loss, metrics=['mae'])
         return model
-    
+
     def custom_loss(self, y_true, y_pred):
-        """커스텀 손실함수"""
         mse = tf.keras.losses.mse(y_true, y_pred)
         mae = tf.keras.losses.mae(y_true, y_pred)
         return 0.7 * mse + 0.3 * mae
-    
+
     def optimize_lstm_hyperparameters(self, X_seq_train, y_seq_train, X_seq_val, y_seq_val) -> Dict:
-        """LSTM 하이퍼파라미터 최적화"""
         def objective(trial):
             units1 = trial.suggest_int("units1", 64, 256)
-            units2 = trial.suggest_int("units2", 32, 128)  
+            units2 = trial.suggest_int("units2", 32, 128)
             units3 = trial.suggest_int("units3", 16, 64)
             dropout = trial.suggest_float("dropout", 0.1, 0.5)
             lr = trial.suggest_loguniform("lr", 1e-5, 1e-2)
-            
+
             model = Sequential([
                 LSTM(units1, return_sequences=True, input_shape=(X_seq_train.shape[1], X_seq_train.shape[2])),
                 Dropout(dropout),
@@ -440,246 +431,201 @@ class ModelEnsemble:
                 Dense(32, activation="relu"),
                 Dense(1)
             ])
-            
+
             model.compile(optimizer=Adam(learning_rate=lr), loss="mse")
             es = EarlyStopping(patience=3, restore_best_weights=True, verbose=0)
-            
+
             model.fit(X_seq_train, y_seq_train,
-                     validation_data=(X_seq_val, y_seq_val),
-                     epochs=30, batch_size=64,
-                     callbacks=[es], verbose=0)
-            
+                      validation_data=(X_seq_val, y_seq_val),
+                      epochs=30, batch_size=64,
+                      callbacks=[es], verbose=0)
+
             val_pred = model.predict(X_seq_val, verbose=0)
             return mean_absolute_error(y_seq_val, val_pred)
-        
+
         study = optuna.create_study(direction="minimize")
         study.optimize(objective, n_trials=self.config.N_TRIALS)
         return study.best_params
-    
+
     def create_stacking_ensemble(self, X_train, y_train, X_val, y_val):
         """스태킹 앙상블 생성"""
+        from sklearn.base import clone
+
         self.base_models = self.create_base_models()
-        
-        # TimeSeriesSplit을 사용한 교차 검증
-        tscv = TimeSeriesSplit(n_splits=self.config.CV_FOLDS)
-        
-        # 베이스 모델들의 예측값을 메타 피처로 생성
         meta_features_train = np.zeros((len(X_train), len(self.base_models)))
         meta_features_val = np.zeros((len(X_val), len(self.base_models)))
-        
+        tscv = TimeSeriesSplit(n_splits=self.config.CV_FOLDS)
+
         for i, (name, model) in enumerate(self.base_models.items()):
-            print(f"Training base model: {name}")
-            
-            from sklearn.base import clone
+            print(f"🔧 Training base model: {name}")
+            oof_preds = np.zeros(len(X_train))
 
-            meta_features_train = np.zeros((len(X_train), len(self.base_models)))
-            meta_features_val = np.zeros((len(X_val), len(self.base_models)))
+            for train_idx, val_idx in tscv.split(X_train):
+                X_tr, X_val_fold = X_train[train_idx], X_train[val_idx]
+                y_tr, y_val_fold = y_train[train_idx], y_train[val_idx]
 
-            tscv = TimeSeriesSplit(n_splits=self.config.CV_FOLDS)
+                cloned_model = clone(model)
+                cloned_model.fit(X_tr, y_tr)
+                oof_preds[val_idx] = cloned_model.predict(X_val_fold)
 
-            for i, (name, model) in enumerate(self.base_models.items()):
-                print(f"Training base model: {name}")
-                
-                oof_preds = np.zeros(len(X_train))  # Out-Of-Fold 예측 초기화
+            meta_features_train[:, i] = oof_preds
 
-                for train_idx, val_idx in tscv.split(X_train):
-                    X_tr, X_val_fold = X_train[train_idx], X_train[val_idx]
-                    y_tr, y_val_fold = y_train[train_idx], y_train[val_idx]
-
-                    cloned_model = clone(model)
-                    cloned_model.fit(X_tr, y_tr)
-                    oof_preds[val_idx] = cloned_model.predict(X_val_fold)
-
-                # OOF 예측 결과를 메타피처로 저장
-                meta_features_train[:, i] = oof_preds
-
-                # 전체 훈련 데이터로 재학습하여 validation 데이터 예측
-                model.fit(X_train, y_train)
-                meta_features_val[:, i] = model.predict(X_val)
-
-            
-            # 전체 훈련 데이터로 모델 재훈련 후 검증 데이터 예측
-            model.fit(X_train, y_train) 
+            # 검증 데이터 예측용 전체 재학습
+            model.fit(X_train, y_train)
             meta_features_val[:, i] = model.predict(X_val)
-        
+
         # 메타 모델 훈련
+        print("📈 Training meta model (LinearRegression)")
         self.meta_model.fit(meta_features_train, y_train)
-        
+
         return meta_features_val
-    
+
     def predict_stacking(self, X_test):
         """스태킹 앙상블 예측"""
         meta_features_test = np.zeros((len(X_test), len(self.base_models)))
-        
         for i, (name, model) in enumerate(self.base_models.items()):
             meta_features_test[:, i] = model.predict(X_test)
-        
+
         return self.meta_model.predict(meta_features_test)
 
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense, Dropout, BatchNormalization
+from tensorflow.keras.optimizers import Adam
+
 class MultiTaskModel:
-    """멀티태스크 학습 모델"""
-    
+    """멀티태스크 학습 모델 클래스"""
+
     def __init__(self, config: Config):
         self.config = config
         self.model = None
         self.scalers = {}
-    
+
     def create_multitask_model(self, input_shape: int, n_targets: int) -> Model:
-        """멀티태스크 신경망 생성"""
-        input_layer = Input(shape=(input_shape,))
+        """공통 특성 추출기 + 각 타겟별 헤드를 갖는 멀티태스크 신경망 생성"""
         
-        # 공통 특성 추출기
-        shared = Dense(256, activation='relu')(input_layer)
-        shared = BatchNormalization()(shared)
-        shared = Dropout(0.3)(shared)
-        
-        shared = Dense(128, activation='relu')(shared)
-        shared = BatchNormalization()(shared)
-        shared = Dropout(0.3)(shared)
-        
-        shared = Dense(64, activation='relu')(shared)
-        shared = BatchNormalization()(shared)
-        shared = Dropout(0.2)(shared)
-        
-        # 각 타겟별 헤드
+        input_layer = Input(shape=(input_shape,), name='input_layer')
+
+        # 🧱 Shared layers
+        x = Dense(256, activation='relu')(input_layer)
+        x = BatchNormalization()(x)
+        x = Dropout(0.3)(x)
+
+        x = Dense(128, activation='relu')(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.3)(x)
+
+        x = Dense(64, activation='relu')(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.2)(x)
+
+        # 🎯 Task-specific heads
         outputs = []
         for i in range(n_targets):
-            head = Dense(32, activation='relu')(shared)
+            head = Dense(32, activation='relu')(x)
             head = Dense(16, activation='relu')(head)
             head = Dense(1, name=f'target_{i}')(head)
             outputs.append(head)
-        
-        model = Model(inputs=input_layer, outputs=outputs)
-        model.compile(
+
+        # 🧠 Model compile
+        self.model = Model(inputs=input_layer, outputs=outputs)
+        self.model.compile(
             optimizer=Adam(learning_rate=0.001),
             loss='mse',
             metrics=['mae']
         )
-        return model
+        return self.model
+
 
 class ElectricityPredictor:
-    """메인 예측 클래스""" 
-    
-    def __init__(self, config: Config = None):
+    """LS 전기요금 예측 전체 파이프라인"""
+
+    def __init__(self, config=None):
         self.config = config or Config()
         self.data_processor = DataProcessor(self.config)
         self.model_ensemble = ModelEnsemble(self.config)
         self.multitask_model = MultiTaskModel(self.config)
-        
-        # 결과 저장용
         self.results = {}
         self.feature_importance = {}
-        
-        # 디렉토리 생성
+
         os.makedirs(self.config.MODELS_DIR, exist_ok=True)
-    
+
     def time_based_split(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """시간 순서 기반 데이터 분할"""
         df_sorted = df.sort_values('측정일시').reset_index(drop=True)
         split_point = int(len(df_sorted) * (1 - self.config.TEST_SIZE))
-        
-        train_df = df_sorted.iloc[:split_point].copy()
-        val_df = df_sorted.iloc[split_point:].copy()
-        
-        return train_df, val_df
-    
+        return df_sorted.iloc[:split_point].copy(), df_sorted.iloc[split_point:].copy()
+
     def prepare_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """전체 데이터 전처리 파이프라인"""
-        print("📊 데이터 로드 중...")
         train_df, test_df = self.data_processor.load_data()
-        
-        print("🕐 시간 피처 생성 중...")
         train_df = self.data_processor.create_datetime_features(train_df)
         test_df = self.data_processor.create_datetime_features(test_df)
-        
-        print("💰 요금 피처 생성 중...")
         train_df = self.data_processor.create_tariff_features(train_df)
         test_df = self.data_processor.create_tariff_features(test_df)
-        
-        # 주요 타겟에 대해 지연/롤링 피처 생성
-        print("📈 시계열 피처 생성 중...")
+
         target_col = "전기요금(원)"
         train_df = self.data_processor.create_lag_features(train_df, target_col)
         train_df = self.data_processor.create_rolling_features(train_df, target_col)
-        
-        # 테스트 데이터도 같은 방식으로 처리 (단, 타겟값이 없으므로 NaN으로 채움)
+
         for col in train_df.columns:
             if col not in test_df.columns and ('_lag_' in col or '_rolling_' in col or '_pct_change_' in col):
                 test_df[col] = np.nan
-        
-        print("🧼 이상치 제거 중...")
-        train_df = self.data_processor.remove_outliers(train_df, target_col, method="combined")
 
-        print("🎯 타겟 인코딩 및 레이블 인코딩 중...")
+        train_df = self.data_processor.remove_outliers(train_df, target_col)
+
         for col in ['작업유형', '시간', '요일', '시간대']:
             train_df, test_df = self.data_processor.target_encoding(train_df, test_df, col, target=target_col)
 
-        train_df['작업유형_encoded'] = self.data_processor.le.fit_transform(train_df['작업유형'])
-        test_df['작업유형_encoded'] = self.data_processor.le.transform(test_df['작업유형'])
+        for col in ['작업유형', '시간대_세분화']:
+            le = LabelEncoder()
+            train_df[col + "_encoded"] = le.fit_transform(train_df[col])
+            test_df[col + "_encoded"] = le.transform(test_df[col])
 
-        train_df['시간대_세분화'] = self.data_processor.le.fit_transform(train_df['시간대_세분화'])
-        test_df['시간대_세분화'] = self.data_processor.le.transform(test_df['시간대_세분화'])
-
-        print("✅ 전처리 완료")
         return train_df, test_df
-    
+
     def run(self):
-        """전체 워크플로우 실행"""
-        print("🚀 전처리 시작")
         train_df, test_df = self.prepare_data()
-
-        # 전기요금 타겟으로 학습/검증 데이터 분리
         train_split, val_split = self.time_based_split(train_df)
-
         target_col = "전기요금(원)"
+
         X_train = train_split.drop(columns=self.config.MULTI_TARGETS + ['측정일시'])
         y_train = train_split[target_col]
         X_val = val_split.drop(columns=self.config.MULTI_TARGETS + ['측정일시'])
         y_val = val_split[target_col]
         X_test = test_df.drop(columns=['측정일시'])
 
-        print("⚙️ 스케일링 진행 중...")
         X_train_scaled, X_val_scaled = self.data_processor.scale_features(X_train, X_val)
         _, X_test_scaled = self.data_processor.scale_features(X_train, X_test)
 
+        X_train_scaled = np.nan_to_num(X_train_scaled, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_val_scaled = np.nan_to_num(X_val_scaled, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_test_scaled = np.nan_to_num(X_test_scaled, nan=0.0, posinf=1e10, neginf=-1e10)
 
-        def clean_input(X):
-            return np.nan_to_num(X, nan=0.0, posinf=1e10, neginf=-1e10)
-        
-        def report_nan_inf(name, arr):
-            print(f"[{name}] NaN: {np.isnan(arr).sum()}, +Inf: {np.isposinf(arr).sum()}, -Inf: {np.isneginf(arr).sum()}")
+        target_scaler = StandardScaler()
+        y_train_scaled = target_scaler.fit_transform(y_train.values.reshape(-1, 1)).ravel()
+        y_val_scaled = target_scaler.transform(y_val.values.reshape(-1, 1)).ravel()
 
-        report_nan_inf("X_train_scaled", X_train_scaled)
-        report_nan_inf("X_val_scaled", X_val_scaled)
-        report_nan_inf("X_test_scaled", X_test_scaled)
+        self.model_ensemble.create_stacking_ensemble(X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled)
 
-        X_train_scaled = clean_input(X_train_scaled)
-        X_val_scaled = clean_input(X_val_scaled)
-        X_test_scaled = clean_input(X_test_scaled)
+        val_preds_scaled = self.model_ensemble.predict_stacking(X_val_scaled)
+        val_preds = target_scaler.inverse_transform(val_preds_scaled.reshape(-1, 1)).ravel()
 
-        print("🔀 스태킹 앙상블 학습 중...")
-        self.model_ensemble.create_stacking_ensemble(X_train_scaled, y_train, X_val_scaled, y_val)
-        val_preds = self.model_ensemble.predict_stacking(X_val_scaled)
+        test_preds_scaled = self.model_ensemble.predict_stacking(X_test_scaled)
+        test_preds = target_scaler.inverse_transform(test_preds_scaled.reshape(-1, 1)).ravel()
+        test_preds = np.clip(test_preds, 0, None)
 
-        val_preds = self.model_ensemble.predict_stacking(X_val_scaled)
-
-        rmse = np.sqrt(mean_squared_error(y_val, val_preds))
         print("📊 MAE: {:.4f}, RMSE: {:.4f}, R2: {:.4f}".format(
             mean_absolute_error(y_val, val_preds),
-            rmse,
+            np.sqrt(mean_squared_error(y_val, val_preds)),
             r2_score(y_val, val_preds)
         ))
 
-        print("🔍 테스트 예측 및 저장")
-        test_preds = self.model_ensemble.predict_stacking(X_test_scaled)
-        test_df['예측 전기요금(원)'] = test_preds
-        
+        submission_df = pd.DataFrame({
+            'id': test_df['id'],
+            '예측 전기요금(원)': test_preds
+        })
+
         save_path = os.path.join(self.config.MODELS_DIR, "test_predictions.csv")
-        print("저장 경로:", save_path)
-        test_df[['측정일시', '예측 전기요금(원)']].to_csv(save_path, index=False)
-        # 저장
-        test_df[['측정일시', '예측 전기요금(원)']].to_csv(os.path.join(self.config.MODELS_DIR, "test_predictions.csv"), index=False)
-        print("✅ 완료 및 저장")
+        submission_df.to_csv(save_path, index=False, encoding='utf-8-sig')
+        print(f"✅ 결과 저장 완료: {save_path}")
 
 if __name__ == "__main__":
     predictor = ElectricityPredictor()
