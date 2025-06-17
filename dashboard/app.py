@@ -754,7 +754,7 @@ ui.nav_panel(
     # ────────────────────
     ui.nav_panel(
         "부록",
-        ui.h3("📚 부록")
+        ui.h3("부록")
     ),
 
     title="⚡ LS Electric 전기요금 실시간 모니터링",
@@ -1153,7 +1153,8 @@ def server(input, output, session):
     @render_widget
     def monthly_summary_chart():
         return make_monthly_summary_chart(final_df, input.selected_month())
-            
+    
+    
     @output
     @render.text
     def peak_cost_info():

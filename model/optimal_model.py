@@ -11,6 +11,7 @@ The final prediction is an ensemble of the available models.
 import os
 import pickle
 from datetime import datetime
+import optuna
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
+import tensorflow as tf
 
 try:
     from statsmodels.tsa.statespace.sarimax import SARIMAX
@@ -30,11 +32,12 @@ except Exception:
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import Dropout, BatchNormalization
 
 # ----------------------------------------------------------------------
 # 1. Load data
 # ----------------------------------------------------------------------
-BASE_DIR = "../data"
+BASE_DIR = "../dashboard/data"
 train_df = pd.read_csv(os.path.join(BASE_DIR, "train.csv"))
 test_df = pd.read_csv(os.path.join(BASE_DIR, "test.csv"))
 
@@ -193,14 +196,18 @@ else:
 # ----------------------------------------------------------------------
 # 10. LSTM model
 # ----------------------------------------------------------------------
-TIME_STEPS = 96 * 7
 
+# 1. 데이터 준비
+
+TIME_STEPS = 96 * 7  # 7일 간 시퀀스
+
+# train_df, test_df는 이미 존재한다고 가정합니다
 seq_scaler = MinMaxScaler()
 seq_data = train_df[FEATURES + [TARGET]].copy()
 seq_scaled = seq_scaler.fit_transform(seq_data)
 seq_scaled = pd.DataFrame(seq_scaled, columns=FEATURES + [TARGET])
 
-def create_sequences(arr: pd.DataFrame, timesteps: int) -> tuple:
+def create_sequences(arr: pd.DataFrame, timesteps: int):
     xs, ys = [], []
     for i in range(len(arr) - timesteps):
         xs.append(arr.iloc[i:i+timesteps][FEATURES].values)
@@ -208,31 +215,72 @@ def create_sequences(arr: pd.DataFrame, timesteps: int) -> tuple:
     return np.array(xs), np.array(ys)
 
 X_seq, y_seq = create_sequences(seq_scaled, TIME_STEPS)
-seq_train, seq_val = int(len(X_seq) * 0.8), int(len(X_seq) * 0.8)
+seq_train = int(len(X_seq) * 0.8)
 X_seq_train, X_seq_val = X_seq[:seq_train], X_seq[seq_train:]
 y_seq_train, y_seq_val = y_seq[:seq_train], y_seq[seq_train:]
 
-lstm_model = Sequential([
-    LSTM(64, input_shape=(TIME_STEPS, len(FEATURES))),
-    Dense(32, activation="relu"),
-    Dense(1),
-])
-lstm_model.compile(optimizer="adam", loss="mse")
 
-es = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
-print("Training LSTM model...")
+# 2. Optuna 하이퍼파라미터 튜닝
+
+def objective(trial):
+    units1 = trial.suggest_int("units1", 64, 256)
+    units2 = trial.suggest_int("units2", 32, 128)
+    dropout = trial.suggest_float("dropout", 0.1, 0.5)
+    lr = trial.suggest_loguniform("lr", 1e-5, 1e-2)
+
+    model = Sequential([
+        LSTM(units1, return_sequences=True, input_shape=(TIME_STEPS, len(FEATURES))),
+        Dropout(dropout),
+        LSTM(units2),
+        Dropout(dropout),
+        Dense(32, activation="relu"),
+        Dense(1)
+    ])
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss="mse")
+    es = EarlyStopping(patience=3, restore_best_weights=True, verbose=0)
+
+    model.fit(X_seq_train, y_seq_train,
+              validation_data=(X_seq_val, y_seq_val),
+              epochs=20, batch_size=32,
+              callbacks=[es], verbose=0)
+
+    val_pred = model.predict(X_seq_val)
+    return mean_absolute_error(y_seq_val, val_pred)
+
+study = optuna.create_study(direction="minimize")
+study.optimize(objective, n_trials=30)
+
+best_params = study.best_params
+print("📌 최적 파라미터:", best_params)
+
+
+# 3. 최종 모델 학습
+
+lstm_model = Sequential([
+    LSTM(best_params["units1"], return_sequences=True, input_shape=(TIME_STEPS, len(FEATURES))),
+    Dropout(best_params["dropout"]),
+    LSTM(best_params["units2"]),
+    Dropout(best_params["dropout"]),
+    Dense(32, activation="relu"),
+    BatchNormalization(),
+    Dense(1)
+])
+lstm_model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=best_params["lr"]), loss="mse")
+
+es = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True, verbose=1)
+print("📈 LSTM 최종 모델 학습 시작...")
 lstm_model.fit(
-    X_seq_train,
-    y_seq_train,
+    X_seq_train, y_seq_train,
     validation_data=(X_seq_val, y_seq_val),
-    epochs=20,
-    batch_size=32,
-    callbacks=[es],
-    verbose=1,
+    epochs=20, batch_size=32,
+    callbacks=[es], verbose=1,
 )
 
+# 4. 모델 평가 및 예측
+
 val_pred = lstm_model.predict(X_seq_val).flatten()
-metrics["lstm"] = r2_score(y_seq_val, val_pred)
+print("📊 R²:", r2_score(y_seq_val, val_pred))
+print("📊 MAE:", mean_absolute_error(y_seq_val, val_pred))
 
 def predict_lstm(model, last_known: pd.DataFrame, future: pd.DataFrame) -> np.ndarray:
     combined = pd.concat([last_known, future], ignore_index=True)
@@ -246,6 +294,7 @@ def predict_lstm(model, last_known: pd.DataFrame, future: pd.DataFrame) -> np.nd
 last_part = train_df[FEATURES + [TARGET]].iloc[-TIME_STEPS:]
 lstm_test_pred = predict_lstm(lstm_model, last_part, test_df[FEATURES])
 
+# 📦 결과 저장
 preds_test["lstm"] = lstm_test_pred
 preds_val["lstm"] = val_pred
 
