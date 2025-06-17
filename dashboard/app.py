@@ -21,11 +21,20 @@ warnings.filterwarnings("ignore")
 # ───────────────────────────────────────────────────────
 # 1) 경로 설정
 # ───────────────────────────────────────────────────────
-BASE_DIR   = Path(__file__).resolve().parent
-DATA_DIR   = BASE_DIR.parent / "data"
-TRAIN_CSV  = DATA_DIR / "train.csv"
-TEST_CSV   = DATA_DIR / "test_predicted_december_data.csv"
-DF_FINAL   = DATA_DIR / "df_final.csv"
+# app.py가 위치한 폴더를 기준으로 상대 경로 설정
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+
+TRAIN_CSV = DATA_DIR / "train.csv"
+TEST_CSV = DATA_DIR / "test_predicted_december_data.csv"
+DF_FINAL = DATA_DIR / "df_final.csv"
+
+# 파일 존재 여부 검증 (선택적으로 사용 가능)
+for path in [TRAIN_CSV, TEST_CSV, DF_FINAL]:
+    if not path.exists():
+        print(f"❌ 파일 없음: {path}")
+    else:
+        print(f"✅ 파일 확인됨: {path}")
 
 # ───────────────────────────────────────────────────────
 # 2) 데이터 로드 함수
@@ -581,7 +590,7 @@ app_ui = ui.page_navbar(
         )
     ),
     
-        # ────────────────────
+    # ────────────────────
     # TAB 2: 전기요금 분석 보고서
     # ────────────────────
 ui.nav_panel(
@@ -1191,6 +1200,3 @@ def server(input, output, session):
 
 # 앱 실행
 app = App(app_ui, server)
-
-if __name__ == "__main__":
-    app.run( port=8000)

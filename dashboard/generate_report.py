@@ -4,16 +4,19 @@ from docxtpl import DocxTemplate, InlineImage
 from pathlib import Path
 from datetime import datetime
 from docx.shared import Mm
+import tempfile
 
 # ───────────────────────────────────────────────────────
 # 템플릿과 출력 디렉토리 설정
 # ───────────────────────────────────────────────────────
-BASE_DIR      = Path(__file__).resolve().parent.parent
-TEMPLATE_PATH = BASE_DIR / "templates" / "report_template.docx"
-OUTPUTS_DIR   = BASE_DIR / "outputs"
+BASE_DIR = Path(__file__).resolve().parent
+
+TEMPLATE_PATH = BASE_DIR / "templates" / "report_template.docx"  # ✅ 올바른 경로
+OUTPUTS_DIR = Path(tempfile.gettempdir()) / "outputs"            # ✅ 안전한 임시 폴더
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
 def generate_report(context: dict) -> Path:
+
     """
     context에 아래 키들이 포함되어야 합니다:
       customer_name, billing_month (예: "07"), customer_id,
