@@ -1,74 +1,110 @@
+# app.py
+
 from shiny import App, render, ui, reactive
 from shinywidgets import render_widget, output_widget
 from plotly.graph_objects import FigureWidget
 from pandas.tseries.offsets import Week
+from pathlib import Path
+import os
 import asyncio
 import pandas as pd
 import numpy as np
 import plotly.express as px
 from plotly.subplots import make_subplots
+import tempfile
 import plotly.graph_objects as go
-import os
 from datetime import datetime, timedelta
-import pickle
+from generate_report import generate_report
 import warnings
 warnings.filterwarnings("ignore")
 
+# ───────────────────────────────────────────────────────
+# 1) 경로 설정
+# ───────────────────────────────────────────────────────
+BASE_DIR   = Path(__file__).resolve().parent
+DATA_DIR   = BASE_DIR.parent / "data"
+TRAIN_CSV  = DATA_DIR / "train.csv"
+TEST_CSV   = DATA_DIR / "test_predicted_december_data.csv"
+DF_FINAL   = DATA_DIR / "df_final.csv"
 
-# 데이터 로드
+# ───────────────────────────────────────────────────────
+# 2) 데이터 로드 함수
+# ───────────────────────────────────────────────────────
 def load_data():
     try:
-        df = pd.read_csv('../data/train.csv')
-        # 날짜 컬럼이 있다면 datetime으로 변환
-        if '측정일시' in df.columns:
-            df['측정일시'] = pd.to_datetime(df['측정일시'])
-        elif 'datetime' in df.columns:
-            df['측정일시'] = pd.to_datetime(df['datetime'])
-            
-        # 필요한 컬럼들이 없으면 생성
-        if '전력사용량' not in df.columns and 'power_usage' in df.columns:
-            df['전력사용량'] = df['power_usage']
-        if '전기요금' not in df.columns and 'cost' in df.columns:
-            df['전기요금'] = df['cost']
-        if '탄소배출량' not in df.columns and 'co2' in df.columns:
-            df['탄소배출량'] = df['co2']
-        if '작업유형' not in df.columns:
-            df['작업유형'] = np.random.choice(['Light_Load', 'Heavy_Load'], len(df))
-            
+        df = pd.read_csv(TRAIN_CSV)
+        # 날짜 컬럼 변환
+        if "측정일시" in df.columns:
+            df["측정일시"] = pd.to_datetime(df["측정일시"])
+        elif "datetime" in df.columns:
+            df["측정일시"] = pd.to_datetime(df["datetime"])
+        # 컬럼명 통일
+        rename_map = {}
+        if "전력사용량(kWh)" in df.columns:
+            rename_map["전력사용량(kWh)"] = "전력사용량"
+        if "power_usage" in df.columns:
+            rename_map["power_usage"] = "전력사용량"
+        if "전기요금(원)" in df.columns:
+            rename_map["전기요금(원)"] = "전기요금"
+        if "cost" in df.columns:
+            rename_map["cost"] = "전기요금"
+        if "탄소배출량(tCO2)" in df.columns:
+            rename_map["탄소배출량(tCO2)"] = "탄소배출량"
+        if "co2" in df.columns:
+            rename_map["co2"] = "탄소배출량"
+        if rename_map:
+            df.rename(columns=rename_map, inplace=True)
+        # 작업유형 없는 경우 랜덤 생성
+        if "작업유형" not in df.columns:
+            df["작업유형"] = np.random.choice(["Light_Load", "Heavy_Load"], len(df))
         return df
     except FileNotFoundError:
-        # 테스트용 더미 데이터 생성
-        dates = pd.date_range(start='2025-05-01', end='2025-06-30', freq='H')
-        df = pd.DataFrame({
-            '측정일시': dates,
-            '전력사용량': np.random.normal(341203, 50000, len(dates)),
-            '전기요금': np.random.normal(120327, 20000, len(dates)),
-            '탄소배출량': np.random.normal(328, 30, len(dates)),
-            '작업유형': np.random.choice(['Light_Load', 'Heavy_Load'], len(dates))
+        # 더미 데이터
+        dates = pd.date_range(start="2025-05-01", end="2025-06-30", freq="H")
+        return pd.DataFrame({
+            "측정일시": dates,
+            "전력사용량": np.random.normal(341203, 50000, len(dates)),
+            "전기요금":     np.random.normal(120327, 20000, len(dates)),
+            "탄소배출량":   np.random.normal(328, 30, len(dates)),
+            "작업유형":     np.random.choice(["Light_Load", "Heavy_Load"], len(dates))
         })
-        return df
 
-df = load_data()
+# ───────────────────────────────────────────────────────
+# 3) 글로벌 데이터프레임
+# ───────────────────────────────────────────────────────
+df_train  = load_data()
+test_df   = pd.read_csv(TEST_CSV)
+test_df["측정일시"] = pd.to_datetime(test_df["측정일시"])
+# test_df 컬럼명 통일
+for orig, std in [("전력사용량(kWh)","전력사용량"),("전기요금(원)","전기요금"),("탄소배출량(tCO2)","탄소배출량")]:
+    if orig in test_df.columns:
+        test_df.rename(columns={orig: std}, inplace=True)
 
-<<<<<<< HEAD
-=======
+# final_df 로드
+final_df = pd.read_csv(DF_FINAL)
+final_df["측정일시"] = pd.to_datetime(final_df["측정일시"], errors="coerce")
 
 
->>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
+
+
+# ───────────────────────────────────────────────────────
+# 스트리머 / 누적기 정의 (반드시 server() 위에 위치!)
+# ───────────────────────────────────────────────────────
 class Streamer:
     def __init__(self, df):
+        # df를 시간순으로 정렬하고 내부 인덱스 초기화
         self.df = df.sort_values("측정일시").reset_index(drop=True)
         self.index = 0
 
     def get_next_batch(self, n=1):
         if self.index >= len(self.df):
             return None
-        batch = self.df.iloc[self.index:self.index + n]
+        batch = self.df.iloc[self.index : self.index + n]
         self.index += n
         return batch
 
     def get_current_data(self):
-        return self.df.iloc[:self.index].copy()
+        return self.df.iloc[: self.index].copy()
 
 
 class Accumulator:
@@ -82,67 +118,253 @@ class Accumulator:
         return self.df.copy()
 
 
-<<<<<<< HEAD
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-test_df = pd.read_csv(os.path.join(os.path.dirname(__file__), '..', 'data', 'test_predicted_december_data.csv'))
-test_df["측정일시"] = pd.to_datetime(test_df["측정일시"])  # 반드시 datetime으로 변환
-
-
-
-print("✅ test_df info")
-print(test_df.info())      # dtype, 결측치, 행수 확인
-print(test_df.head())      # 샘플 확인
-
-=======
-# 기준값 계산 함수
-def get_november_baseline(train_df):
-    nov_df = train_df[
-        (train_df["측정일시"] >= "2024-11-01") &
-        (train_df["측정일시"] < "2024-12-01")
-    ].copy()
-
-    # 누적 기준값 (평균 아님!)
-    daily_total = nov_df.groupby(nov_df["측정일시"].dt.date)["전력사용량"].sum().mean()
-    weekly_total = nov_df.groupby(nov_df["측정일시"].dt.to_period("W"))["전력사용량"].sum().mean()
-    monthly_total = nov_df["전력사용량"].sum()
-
-
-    cost_daily_total = nov_df.groupby(nov_df["측정일시"].dt.date)["전기요금"].sum().mean()
-    cost_weekly_total = nov_df.groupby(nov_df["측정일시"].dt.to_period("W"))["전기요금"].sum().mean()
-    cost_monthly_total = nov_df["전기요금"].sum()
-
+# ───────────────────────────────────────────────────────
+# 4) Baseline 계산 함수
+# ───────────────────────────────────────────────────────
+def get_november_baseline(df):
+    nov = df[(df["측정일시"] >= "2024-11-01") & (df["측정일시"] < "2024-12-01")].copy()
+    daily_total   = nov.groupby(nov["측정일시"].dt.date)["전력사용량"].sum().mean()
+    weekly_total  = nov.groupby(nov["측정일시"].dt.to_period("W"))["전력사용량"].sum().mean()
+    monthly_total = nov["전력사용량"].sum()
+    cost_daily    = nov.groupby(nov["측정일시"].dt.date)["전기요금"].sum().mean()
+    cost_weekly   = nov.groupby(nov["측정일시"].dt.to_period("W"))["전기요금"].sum().mean()
+    cost_monthly  = nov["전기요금"].sum()
     return {
-        "power": {
-            "daily": daily_total,
-            "weekly": weekly_total,
-            "monthly": monthly_total,
-        },
-        "cost": {
-            "daily": cost_daily_total,
-            "weekly": cost_weekly_total,
-            "monthly": cost_monthly_total,
-        }
+        "power": {"daily": daily_total, "weekly": weekly_total, "monthly": monthly_total},
+        "cost":  {"daily": cost_daily,   "weekly": cost_weekly,   "monthly": cost_monthly}
     }
 
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-final_df = pd.read_csv(os.path.join(os.path.dirname(__file__), '..', 'data', 'df_final.csv'))
-test_df = pd.read_csv(os.path.join(os.path.dirname(__file__), '..', 'data', 'test_predicted_december_data.csv'))
-test_df["측정일시"] = pd.to_datetime(test_df["측정일시"])  # 반드시 datetime으로 변환
-train_df = pd.read_csv(os.path.join(BASE_DIR, '..', 'data', 'train.csv'))
-train_df["측정일시"] = pd.to_datetime(train_df["측정일시"])
-if "전력사용량(kWh)" in train_df.columns:
-    train_df["전력사용량"] = train_df["전력사용량(kWh)"]
-if "전기요금(원)" in train_df.columns:
-    train_df["전기요금"] = train_df["전기요금(원)"]
-if "탄소배출량(tCO2)" in train_df.columns:
-    train_df["탄소배출량"] = train_df["탄소배출량(tCO2)"]
-
-nov_baseline = get_november_baseline(train_df)
+nov_baseline = get_november_baseline(df_train)
 
 
->>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
+
+
+
+# ───────────────────────────────────────────────────────
+# Chart helper functions (붙여넣기만 하면 동작)
+# ───────────────────────────────────────────────────────
+
+def make_work_type_pie(df):
+    import plotly.express as px
+    if df.empty or "작업유형" not in df:
+        return px.pie(title="작업유형별 분포 (데이터 없음)")
+    cnt = df["작업유형"].value_counts()
+    fig = px.pie(
+        names=cnt.index,
+        values=cnt.values,
+        title="작업유형별 분포",
+        height=300
+    )
+    return fig
+
+
+
+def make_cost_trend_chart(df, agg_unit):
+    import plotly.graph_objects as go
+    import pandas as pd
+
+    if df is None or df.empty:
+        return go.Figure()
+
+    # --- 원본 렌더러의 전처리 & 집계 로직 ---
+    date_col = next((c for c in df.columns if "일시" in c or "시간" in c), None)
+    cost_col = next((c for c in df.columns if "요금" in c or "비용" in c), None)
+    if not date_col or not cost_col:
+        return go.Figure()
+    d = df[[date_col, cost_col]].copy()
+    d.columns = ["datetime", "cost"]
+    d["datetime"] = pd.to_datetime(d["datetime"], errors="coerce")
+    d["cost"]     = pd.to_numeric(d["cost"], errors="coerce")
+    d = d.dropna().sort_values("datetime")
+
+    # aggregation
+    if agg_unit == "hour":
+        d["period"] = d["datetime"].dt.floor("H")
+        d["label"]  = d["period"].dt.strftime("%m/%d %H:%M")
+    elif agg_unit == "day":
+        d["period"] = d["datetime"].dt.date
+        d["label"]  = pd.to_datetime(d["period"]).dt.strftime("%m/%d")
+    else:  # weekday
+        d["weekday_num"] = d["datetime"].dt.weekday
+        d["period"]      = d["weekday_num"]
+        wdmap = {i: w for i, w in enumerate(
+            ["월요일","화요일","수요일","목요일","금요일","토요일","일요일"]
+        )}
+        d["label"] = d["weekday_num"].map(wdmap)
+
+    if agg_unit == "weekday":
+        agg = (
+            d.groupby(["weekday_num","label"])["cost"]
+             .agg(["sum","mean"])
+             .reset_index()
+             .sort_values("weekday_num")
+        )
+        agg.columns = ["weekday_num","label","total","average"]
+    else:
+        agg = (
+            d.groupby("label")["cost"]
+             .agg(["sum","mean"])
+             .reset_index()
+        )
+        agg.columns = ["label","total","average"]
+
+    # --- figure 생성 (원본 레이아웃 그대로) ---
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=agg["label"], y=agg["total"],
+        name="누적 요금",
+        marker=dict(color="gray", line=dict(color="darkgray", width=0.5)),
+        opacity=0.8,
+        hovertemplate="<b>%{x}</b><br>누적: %{y:,.0f}원<extra></extra>"
+    ))
+    fig.add_trace(go.Scatter(
+        x=agg["label"], y=agg["average"],
+        mode="lines+markers",
+        name="평균 요금",
+        line=dict(color="black", width=3),
+        marker=dict(color="black", size=6),
+        yaxis="y2",
+        hovertemplate="<b>%{x}</b><br>평균: %{y:,.0f}원<extra></extra>"
+    ))
+    fig.update_layout(
+        xaxis=dict(type="category", tickangle=-45, showgrid=True, gridcolor="lightgray"),
+        yaxis=dict(title="누적 요금 (원)", showgrid=True, gridcolor="lightgray"),
+        yaxis2=dict(title="평균 요금 (원)", overlaying="y", side="right", showgrid=False),
+        barmode="group",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        height=450,
+        margin=dict(l=60,r=60,t=80,b=60),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+        hovermode="x unified",
+        title=dict(text="<b>[B] 전력 요금 시계열 분석</b>", x=0.5)
+    )
+    # annotation
+    total, avg, mx, cnt = agg["total"].sum(), agg["average"].mean(), agg["total"].max(), len(d)
+    fig.add_annotation(
+        text=(
+            f"📊 요약 통계<br>"
+            f"총 요금: {total:,.0f}원<br>"
+            f"평균: {avg:,.0f}원<br>"
+            f"최대: {mx:,.0f}원<br>"
+            f"데이터: {cnt}개"
+        ),
+        xref="paper", yref="paper", x=0.02, y=0.98,
+        showarrow=False, align="left",
+        bgcolor="rgba(255,255,255,0.9)", bordercolor="gray", borderwidth=1,
+        font=dict(size=10)
+    )
+    return fig
+
+
+def make_monthly_summary_chart(df_full, sel_month):
+    import plotly.graph_objects as go
+    import pandas as pd
+    import numpy as np
+
+    if df_full is None or df_full.empty:
+        return go.Figure()
+
+    df = df_full.copy()
+    df["측정일시"] = pd.to_datetime(df["측정일시"], errors="coerce")
+    latest = df["측정일시"].max()
+    one_year_ago = latest - pd.DateOffset(years=1)
+    df = df[(df["측정일시"] >= one_year_ago) & (df["측정일시"] <= latest)]
+
+    grp = (
+        df.groupby(df["측정일시"].dt.to_period("M"))
+          .agg({"전력사용량":"sum","전기요금":"mean"})
+          .reset_index()
+    )
+    grp["month_ts"] = grp["측정일시"].dt.to_timestamp()
+    grp["label"]    = grp["month_ts"].dt.strftime("%Y-%m")
+    grp["color"]    = np.where(grp["label"]==sel_month, "red", "gray")
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=grp["label"], y=grp["전력사용량"],
+        name="전력사용량", marker_color=grp["color"], yaxis="y1"
+    ))
+    fig.add_trace(go.Scatter(
+        x=grp["label"], y=grp["전기요금"],
+        name="평균요금", mode="lines+markers",
+        line=dict(color="black"), yaxis="y2"
+    ))
+    fig.add_trace(go.Bar(x=[None], y=[None], name="현재 분석 달", marker_color="red"))
+
+    fig.update_layout(
+        title="1년간 월별 전력사용량 및 평균요금 추이",
+        xaxis=dict(type="category"),
+        yaxis=dict(title="전력사용량 (kWh)", side="left"),
+        yaxis2=dict(title="평균요금 (원)", overlaying="y", side="right", showgrid=False),
+        plot_bgcolor="white", paper_bgcolor="white",
+        height=450, margin=dict(t=60,b=60,l=60,r=60)
+    )
+    return fig
+
+
+
+
+# ───────────────────────────────────────────────────────
+# 헬퍼 함수: 월별 전력사용량 누적 + 평균 전기요금 차트
+# ───────────────────────────────────────────────────────
+def make_monthly_summary_chart(df_full, sel_month: str):
+    import pandas as pd
+    import plotly.graph_objects as go
+    # 복사 & 날짜타입
+    df = df_full.copy()
+    df["측정일시"] = pd.to_datetime(df["측정일시"], errors="coerce")
+    # 전력·요금 컬럼 자동 감지
+    power_col = next((c for c in df.columns if "전력사용량" in c), None)
+    cost_col  = next((c for c in df.columns if "전기요금" in c), None)
+    if df.empty or power_col is None or cost_col is None:
+        return go.Figure()
+
+    # 최근 1년 데이터로 필터링
+    latest = df["측정일시"].max()
+    one_year_ago = latest - pd.DateOffset(years=1)
+    df = df[(df["측정일시"] >= one_year_ago) & (df["측정일시"] <= latest)]
+
+    # 월(period)단위 집계
+    df["측정월"] = df["측정일시"].dt.to_period("M").dt.to_timestamp()
+    agg = (
+        df.groupby("측정월")
+          .agg({power_col: "sum", cost_col: "mean"})
+          .reset_index()
+    )
+    agg["측정월_라벨"] = agg["측정월"].dt.strftime("%Y-%m")
+    # 현재 선택달만 빨간, 나머지 회색
+    agg["color"] = ["red" if lab == sel_month else "gray" for lab in agg["측정월_라벨"]]
+
+    # Plotly 그리기
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=agg["측정월_라벨"],
+        y=agg[power_col],
+        name="월별 전력사용량",
+        marker_color=agg["color"],
+        yaxis="y1",
+    ))
+    fig.add_trace(go.Scatter(
+        x=agg["측정월_라벨"],
+        y=agg[cost_col],
+        name="월별 평균요금",
+        mode="lines+markers",
+        yaxis="y2",
+    ))
+    fig.update_layout(
+        title="최근 1년 월별 전력사용량 및 평균요금",
+        xaxis=dict(title="월"),
+        yaxis=dict(title="전력사용량", side="left"),
+        yaxis2=dict(title="평균요금", side="right", overlaying="y"),
+        height=350,
+        legend=dict(orientation="h", y=1.1),
+        margin=dict(t=60, b=40, l=40, r=40),
+    )
+    return fig
+
+
+
 # ✅ 컬럼명 일괄 매핑
 if "전력사용량(kWh)" in test_df.columns:
     test_df["전력사용량"] = test_df["전력사용량(kWh)"]
@@ -269,15 +491,12 @@ app_ui = ui.page_navbar(
                         },
                         selected="line"
                     ),
-<<<<<<< HEAD
-=======
                     ui.br(),
                     ui.input_slider(
                         "update_interval",
                         "🔄 업데이트 간격 (초):",
                         min=0.1, max=5, value=1, step=0.1
                     ),
->>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
                     class_="sidebar-custom"
                 ),
                 width=300
@@ -314,12 +533,7 @@ app_ui = ui.page_navbar(
                                         end=test_df["측정일시"].max().strftime("%Y-%m-%d")
                                     ),
                                     ui.br(),
-<<<<<<< HEAD
-                                    ui.input_action_button("toggle_streaming", "⏯️ 스트리밍 시작 / 중지", class_="btn btn-primary"),
-                                    ui.input_action_button("update_chart", "예측시작", class_="btn-primary"),
-=======
                                     ui.input_action_button("update_chart", "예측 시작", class_="btn-primary"),
->>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
                                     style="padding: 20px;"
                                 )
                             )
@@ -452,7 +666,7 @@ ui.nav_panel(
             class_="chart-container"
         ),
         ui.div(
-            ui.input_action_button("download_pdf", "📄 PDF 보고서 다운로드", class_="btn-success btn-lg"),
+            ui.download_button("download_report", "📄 Word 보고서 다운로드", class_="btn-success btn-lg"),
             class_="text-center"
         )
     )
@@ -471,15 +685,6 @@ ui.nav_panel(
 )
 
 def server(input, output, session):
-<<<<<<< HEAD
-    @reactive.effect
-    def toggle_streaming_state():
-        if input.toggle_streaming():
-            current = is_streaming.get()
-            is_streaming.set(not current)
-            print(f"🚦 스트리밍 {'시작' if not current else '중지'}됨")
-
-=======
     # ───────────────────────────────────────────────────────
     # 0) FigureWidget 초기화 (한 번만)
     # ───────────────────────────────────────────────────────
@@ -501,40 +706,38 @@ def server(input, output, session):
     legend=dict(orientation="h", y=-0.2)
 )
     
->>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
 
     # ───────────────────────────────────────────────────────
     # 1) Reactive 데이터 준비 (분석 보고서 탭)
     # ───────────────────────────────────────────────────────
-<<<<<<< HEAD
-
-=======
->>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
     @reactive.Calc
     def summary_data():
-        # 📂 CSV 로드
+        # 📂 CSV 파일 경로 설정
         base_dir = os.path.dirname(__file__)
         file_path = os.path.abspath(os.path.join(base_dir, "..", "data", "df_final.csv"))
+
+        # ✅ CSV 파일 로드
         df_final = pd.read_csv(file_path)
 
-        # ✅ datetime 형변환 강제 수행
+        # ✅ 날짜 형식 변환
         if "측정일시" not in df_final.columns:
             raise KeyError("❌ '측정일시' 컬럼이 없습니다.")
         df_final["측정일시"] = pd.to_datetime(df_final["측정일시"], errors="coerce")
 
         df2 = df_final.copy()
 
-        # ✅ 날짜 필터 안전하게 적용
+        # ✅ 유저가 선택한 월 필터링
         try:
             selected_month = input.selected_month()  # 예: "2024-05"
             start = pd.to_datetime(selected_month + "-01")
-            end = start + pd.offsets.MonthEnd(0)  # 말일 계산
+            end = start + pd.offsets.MonthEnd(0)  # 해당 월의 마지막 날 계산
 
             df2 = df2[(df2["측정일시"] >= start) & (df2["측정일시"] <= end)]
         except Exception as e:
             print("⛔ 날짜 필터 적용 중 오류:", e)
 
         return df2
+
 
     # ───────────────────────────────────────────────────────
     # 2) Reactive 데이터 준비 (분석 보고서 탭)
@@ -627,110 +830,6 @@ def server(input, output, session):
             fig_realtime.data[0].x = x
             fig_realtime.data[0].y = d["전력사용량"].tolist()
         else:
-<<<<<<< HEAD
-            cutoff = now - timedelta(days=1)
-        return df[df["측정일시"] >= cutoff].copy()
-    
-    streamer = reactive.Value(Streamer(test_df))
-    accumulator = reactive.Value(Accumulator())
-    is_streaming = reactive.Value(True)
-    current_data = reactive.Value(pd.DataFrame())
-
-
-
-    @reactive.effect
-    def stream_data():
-        try:
-            if not is_streaming.get():
-                return
-
-            # ⏱️ 업데이트 간격 (초 단위)
-            interval_sec = input.update_interval() if hasattr(input, "update_interval") else 1
-            reactive.invalidate_later(interval_sec)
-
-            s = streamer.get()
-            next_batch = s.get_next_batch(1)
-
-            if next_batch is not None:
-                accumulator.get().accumulate(next_batch)
-                current_data.set(accumulator.get().get())
-                print(f"📡 Streaming: index={s.index}, batch={len(next_batch)}")
-            else:
-                print("✅ 스트리밍 완료")
-                is_streaming.set(False)
-
-        except Exception as e:
-            print("⛔ 오류 발생:", e)
-            is_streaming.set(False)
-
-    # ───────────────────────────────────────────────────────
-    # 2) [A] 요약 카드 (실시간 탭)
-    # ───────────────────────────────────────────────────────
-    @output
-    @render.ui
-    def card_power():
-        d = simulated_data()
-        val = d["전력사용량"].iloc[-1] if not d.empty else 0
-        return ui.div(
-            ui.div(f"{val:,.0f}", class_="metric-value"),
-            ui.div("kWh", class_="metric-label"),
-            class_="metric-card",
-        )
-
-    @output
-    @render.ui
-    def card_cost():
-        d = simulated_data()
-        val = d["전기요금"].iloc[-1] if not d.empty else 0
-        return ui.div(
-            ui.div(f"{val:,.0f}", class_="metric-value"),
-            ui.div("원", class_="metric-label"),
-            class_="metric-card",
-        )
-
-    @output
-    @render.ui
-    def card_co2():
-        d = simulated_data()
-        val = d["탄소배출량"].iloc[-1] if not d.empty else 0
-        return ui.div(
-            ui.div(f"{val:,.0f}", class_="metric-value"),
-            ui.div("CO₂", class_="metric-label"),
-            class_="metric-card",
-        )
-
-    @output
-    @render.ui
-    def card_pf():
-        return ui.div(
-            ui.div("0.95", class_="metric-value"),
-            ui.div("PF", class_="metric-label"),
-            class_="metric-card",
-        )
-
-    @output
-    @render.ui
-    def card_work_type():
-        d = simulated_data()
-        typ = d["작업유형"].mode().iloc[0] if not d.empty else "N/A"
-        return ui.div(
-            ui.div(typ, class_="metric-value", style="font-size:18px;"),
-            ui.div("작업유형", class_="metric-label"),
-            class_="metric-card",
-        )
-
-    @output
-    @render.ui
-    def card_weather():
-        return ui.div(
-            ui.div("31°C", class_="metric-value"),
-            ui.div("날씨", class_="metric-label"),
-            class_="metric-card",
-        )
-
-    # ───────────────────────────────────────────────────────
-    # 3) [B] 실시간 그래프
-=======
             fig_realtime.data[0].x = []
             fig_realtime.data[0].y = []
 
@@ -744,66 +843,10 @@ def server(input, output, session):
 
     # ───────────────────────────────────────────────────────
     # 4) Output 정의
->>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
     # ───────────────────────────────────────────────────────
     @output
     @render_widget
     def realtime_chart():
-<<<<<<< HEAD
-        d = simulated_data()
-        
-        if d.empty or len(d) < 2:
-            fig = go.Figure()
-            fig.add_annotation(
-                text="📭 표시할 데이터가 없습니다",
-                x=0.5, y=0.5, showarrow=False, font=dict(size=20),
-                xref="paper", yref="paper"
-            )
-            fig.update_layout(height=400)
-            return fig
-
-        # 샘플링: 최대 100개로 제한
-        sample = d.iloc[:: max(1, len(d)//100)]
-        
-        # 차트 타입 선택
-        chart_type = input.chart_type()
-        Trace = go.Scatter if chart_type == "line" else go.Bar
-
-        # 시각화 시작
-        fig = go.Figure()
-
-        if "전력사용량" in input.metrics_select():
-            fig.add_trace(Trace(
-                x=sample["측정일시"],
-                y=sample["전력사용량"],
-                name="전력사용량",
-                yaxis="y",
-                marker_color="#3498db"
-            ))
-
-        if "전기요금" in input.metrics_select():
-            fig.add_trace(Trace(
-                x=sample["측정일시"],
-                y=sample["전기요금"],
-                name="전기요금",
-                yaxis="y2",
-                marker_color="#e74c3c"
-            ))
-
-        # 레이아웃 업데이트
-        fig.update_layout(
-            title="📡 실시간 전력사용량 & 전기요금",
-            xaxis=dict(title="시간", tickformat="%m-%d %H:%M"),
-            yaxis=dict(title="전력사용량 (kWh)", side="left"),
-            yaxis2=dict(title="전기요금 (원)", overlaying="y", side="right"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            hovermode="x unified",
-            margin=dict(t=60, b=40, l=50, r=50),
-            height=400,
-        )
-
-        return fig
-=======
         # 항상 동일한 FigureWidget 반환
         return fig_realtime
 
@@ -848,8 +891,6 @@ def server(input, output, session):
     @render.ui
     def card_weather():
         return ui.div(ui.div("31°C", class_="metric-value"), ui.div("날씨", class_="metric-label"), class_="metric-card")
-
->>>>>>> b289ecf (Merge pull request #8 from P-fe/main)
 
 
     # ───────────────────────────────────────────────────────
@@ -1006,159 +1047,10 @@ def server(input, output, session):
             txt += f"진상역률 평균: {pf2:.2f}%"
         return txt.strip() or "역률 정보 없음"
 
-    @output
+    @output 
     @render_widget
     def cost_trend_chart():
-        """전력 요금 시계열 분석 차트 - 집계 단위 필터 적용"""
-        try:
-            d = summary_data()
-            if d is None or len(d) == 0:
-                return create_simple_error_chart("데이터가 없습니다")
-
-            # 컬럼 설정
-            date_col = next((col for col in d.columns if '일시' in col or '시간' in col), None)
-            cost_col = next((col for col in d.columns if '요금' in col or '비용' in col), None)
-
-            if not date_col or not cost_col:
-                return create_simple_error_chart("날짜 또는 요금 컬럼을 찾을 수 없습니다")
-
-            # 전처리
-            df = d[[date_col, cost_col]].copy()
-            df.columns = ['datetime', 'cost']
-            df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
-            df['cost'] = pd.to_numeric(df['cost'], errors='coerce')
-            df = df.dropna().sort_values('datetime')
-
-            if len(df) == 0:
-                return create_simple_error_chart("유효한 데이터가 없습니다")
-
-            # 집계 단위 처리
-            aggregation = input.aggregation_unit()
-
-            if aggregation == "hour":
-                df["period"] = df["datetime"].dt.floor("H")
-                df["label"] = df["period"].dt.strftime("%m/%d %H:%M")
-
-            elif aggregation == "day":
-                df["period"] = df["datetime"].dt.date
-                df["label"] = pd.to_datetime(df["period"]).dt.strftime("%m/%d")
-
-            elif aggregation == "weekday":
-                df["weekday_num"] = df["datetime"].dt.weekday  # 0~6
-                df["period"] = df["weekday_num"]
-                weekday_map = {
-                    0: "월요일", 1: "화요일", 2: "수요일",
-                    3: "목요일", 4: "금요일", 5: "토요일", 6: "일요일"
-                }
-                df["label"] = df["weekday_num"].map(weekday_map)
-
-            else:
-                return create_simple_error_chart("집계 단위가 올바르지 않습니다")
-
-            # 집계
-            if aggregation == "weekday":
-                # 요일별 집계 시 순서 보장
-                agg_df = df.groupby(["weekday_num", "label"])["cost"].agg(["sum", "mean"]).reset_index()
-                agg_df.columns = ["weekday_num", "label", "total", "average"]
-                # 요일 순서대로 정렬 (월요일=0 ~ 일요일=6)
-                agg_df = agg_df.sort_values("weekday_num")
-            else:
-                agg_df = df.groupby("label")["cost"].agg(["sum", "mean"]).reset_index()
-                agg_df.columns = ["label", "total", "average"]
-
-            # 차트
-            fig = go.Figure()
-
-            fig.add_trace(go.Bar(
-                x=agg_df['label'],
-                y=agg_df['total'],
-                name='누적 요금',
-                marker=dict(color='gray', line=dict(color='darkgray', width=0.5)),
-                opacity=0.8,
-                hovertemplate='<b>%{x}</b><br>누적: %{y:,.0f}원<extra></extra>'
-            ))
-
-            fig.add_trace(go.Scatter(
-                x=agg_df['label'],
-                y=agg_df['average'],
-                mode='lines+markers',
-                name='평균 요금',
-                line=dict(color='black', width=3),
-                marker=dict(color='black', size=6),
-                yaxis='y2',
-                hovertemplate='<b>%{x}</b><br>평균: %{y:,.0f}원<extra></extra>'
-            ))
-
-            fig.update_layout(
-                title=dict(
-                    text='<b>[B] 전력 요금 시계열 분석</b>',
-                    x=0.5,
-                    font=dict(size=16, color='black')
-                ),
-                xaxis=dict(
-                    title='시간',
-                    tickangle=-45,
-                    type='category',
-                    showgrid=True,
-                    gridcolor='lightgray'
-                ),
-                yaxis=dict(
-                    title='누적 요금 (원)',
-                    side='left',
-                    showgrid=True,
-                    gridcolor='lightgray',
-                    tickformat=',.0f'
-                ),
-                yaxis2=dict(
-                    title='평균 요금 (원)',
-                    side='right',
-                    overlaying='y',
-                    tickformat=',.0f',
-                    showgrid=False
-                ),
-                plot_bgcolor='white',
-                paper_bgcolor='white',
-                height=450,
-                margin=dict(l=60, r=60, t=80, b=60),
-                legend=dict(
-                    orientation='h',
-                    yanchor='bottom',
-                    y=1.02,
-                    xanchor='center',
-                    x=0.5,
-                    bgcolor='rgba(255,255,255,0.8)',
-                    bordercolor='gray',
-                    borderwidth=1
-                ),
-                hovermode='x unified'
-            )
-
-            # 통계 요약
-            total_cost = agg_df['total'].sum()
-            avg_cost = agg_df['average'].mean()
-            max_cost = agg_df['total'].max()
-            data_points = len(df)
-
-            fig.add_annotation(
-                text=f"<b>📊 요약 통계</b><br>" +
-                    f"총 요금: {total_cost:,.0f}원<br>" +
-                    f"평균: {avg_cost:,.0f}원<br>" +
-                    f"최대: {max_cost:,.0f}원<br>" +
-                    f"데이터: {data_points:,}개",
-                xref="paper", yref="paper",
-                x=0.02, y=0.98,
-                showarrow=False,
-                align="left",
-                bgcolor="rgba(255,255,255,0.9)",
-                bordercolor="gray",
-                borderwidth=1,
-                font=dict(size=10, color="black")
-            )
-
-            return fig
-
-        except Exception as e:
-            return create_simple_error_chart(f"오류: {str(e)}")
+        return make_cost_trend_chart(summary_data(), input.aggregation_unit())
 
 
     def create_simple_error_chart(message):
@@ -1179,83 +1071,11 @@ def server(input, output, session):
         )
         return fig
 
-    @output
+    @output 
     @render_widget
     def monthly_summary_chart():
-        """1년간 월별 전력사용량 + 평균요금 추이 (날짜 필터 무시)"""
-        try:
-            # 🔹 summary_data는 날짜 필터가 적용되므로 load_data로 전체 불러옴
-            base_dir = os.path.dirname(__file__)
-            file_path = os.path.abspath(os.path.join(base_dir, "..", "data", "df_final.csv"))
-            df = pd.read_csv(file_path)
-            df["측정일시"] = pd.to_datetime(df["측정일시"], errors="coerce")
-
-            # 🔹 최근 1년 필터링
-            latest = df["측정일시"].max()
-            one_year_ago = latest - pd.DateOffset(years=1)
-            df = df[(df["측정일시"] >= one_year_ago) & (df["측정일시"] <= latest)]
-
-            # 🔹 월별 집계
-            monthly = (
-                df.groupby(df["측정일시"].dt.to_period("M"))
-                .agg({
-                    "전력사용량(kWh)": "sum",
-                    "전기요금(원)": "mean"
-                })
-                .reset_index()
-            )
-            monthly["측정월"] = monthly["측정일시"].dt.to_timestamp()
-            monthly["측정월_라벨"] = monthly["측정월"].dt.strftime("%Y-%m")
-
-            # 🔴 선택한 월에만 빨간색
-            selected = input.selected_month()  # 예: "2024-05"
-            monthly["막대색"] = np.where(monthly["측정월_라벨"] == selected, "red", "gray")
-
-            # 🔹 Plotly 그리기
-            fig = go.Figure()
-
-            fig.add_trace(go.Bar(
-                x=monthly["측정월_라벨"],
-                y=monthly["전력사용량(kWh)"],
-                name="전력사용량(kWh)",
-                marker_color=monthly["막대색"],
-                yaxis="y1"
-            ))
-
-            fig.add_trace(go.Scatter(
-                x=monthly["측정월_라벨"],
-                y=monthly["전기요금(원)"],
-                name="평균요금(원)",
-                mode="lines+markers",
-                line=dict(color="black"),
-                yaxis="y2"
-            ))
-
-            # ✅ 범례용 빨간 막대 더미 추가
-            fig.add_trace(go.Bar(
-                x=[None],
-                y=[None],
-                name="현재 분석 달",
-                marker_color="red",
-                showlegend=True
-            ))
-
-
-            fig.update_layout(
-                title="1년간 월별 전력사용량 및 평균요금 추이",
-                xaxis=dict(title="월", type="category"),
-                yaxis=dict(title="전력사용량 (kWh)", side="left"),
-                yaxis2=dict(title="평균요금 (원)", side="right", overlaying="y", showgrid=False),
-                height=450,
-                plot_bgcolor="white",
-                margin=dict(t=60, b=60, l=60, r=60)
-            )
-
-            return fig
-
-        except Exception as e:
-            return create_simple_error_chart(f"오류 발생: {e}")
-        
+        return make_monthly_summary_chart(final_df, input.selected_month())
+            
     @output
     @render.text
     def peak_cost_info():
@@ -1303,7 +1123,8 @@ def server(input, output, session):
         # ✅ 같은 소스로부터 전체 데이터 재로딩 (df 대신)
         base_dir = os.path.dirname(__file__)
         file_path = os.path.abspath(os.path.join(base_dir, "..", "data", "df_final.csv"))
-        df_full = pd.read_csv(file_path)
+        df_full = pd.read_csv(BASE_DIR.parent / "data" / "df_final.csv")
+
         df_full["측정일시"] = pd.to_datetime(df_full["측정일시"], errors="coerce")
 
         prev = df_full[(df_full["측정일시"] >= prev_cutoff) & (df_full["측정일시"] < min_date)]
@@ -1312,6 +1133,60 @@ def server(input, output, session):
         rate = (cur_sum - prev_sum) / prev_sum * 100 if prev_sum else 0
         return f"{rate:+.1f}%"
     
+    @output
+    @render.download(filename="LS_Electric_보고서.docx")
+    def download_report():
+        # 1) summary_data() 를 사용해 현재 선택 월 데이터 가져오기
+        d = summary_data()
+        if d.empty:
+            raise ValueError("📂 데이터 없음")
+
+        # 2) 차트 생성용 원본·파라미터
+        current_df = d.copy()                  # 실 데이터를 쓰는 df
+        sel_month  = input.selected_month()    # "2024-05" 형식
+        agg_unit   = input.aggregation_unit()  # "hour"/"day"/"weekday"
+
+        # 3) 각 차트 함수 호출
+        fig1 = make_work_type_pie(summary_data())  
+        fig2 = make_cost_trend_chart(summary_data(), input.aggregation_unit())
+        fig3 = make_monthly_summary_chart(final_df, input.selected_month())
+
+
+        # 4) 임시 파일 경로 생성
+        import tempfile
+        img1 = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+        img2 = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+        img3 = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+
+        # 5) 차트 PNG 로 저장
+        fig1.write_image(img1, width=600, height=300)
+        fig2.write_image(img2, width=600, height=300)
+        fig3.write_image(img3, width=600, height=300)
+
+        # 6) 워드 템플릿에 넘길 context 구성
+        context = {
+            "customer_name":      "홍길동",
+            "billing_month":      sel_month.split("-")[1],
+            "customer_id":        "LS202405-01",
+            "total_cost":         f"{d['전기요금(원)'].sum():,.0f} 원",
+            "usage_period":       f"{d['측정일시'].min():%Y-%m-%d} ~ {d['측정일시'].max():%Y-%m-%d}",
+            "main_work_type":     d["작업유형"].mode().iloc[0],
+            "previous_month":     f"{(pd.to_datetime(sel_month + '-01') - pd.DateOffset(months=1)):%m}",
+            "current_usage":      f"{d['전력사용량(kWh)'].sum():,.1f} kWh",
+            "previous_usage":     "…",  # 필요 시 계산
+            "address":            "서울시 강남구 역삼동…",
+            "previous_total_cost":"…",  # 필요 시 계산
+            "contract_type":      "일반용 저압",
+            # 차트 경로
+            "graph1_path": img1,
+            "graph2_path": img2,
+            "graph3_path": img3,
+        }
+
+        # 7) 보고서 생성
+        report_path = generate_report(context)
+        return open(report_path, "rb")
+
 
 
 # 앱 실행
