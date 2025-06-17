@@ -378,46 +378,6 @@ def make_monthly_summary_chart(df_full, sel_month: str):
     return fig
 
 
-# 1) 실제 데이터로부터 필요한 값을 계산
-def get_peak_cost_info(df):
-    # 최고 요금 정보: 전기요금이 가장 높은 행
-    peak_row = df.loc[df["전기요금"].idxmax()]
-    peak_cost = peak_row["전기요금"]
-    peak_date = peak_row["측정일시"]
-    return f"₩{peak_cost:,.0f} (발생일시: {peak_date:%Y-%m-%d %H:%M})"
-
-def get_avg_carbon_info(df):
-    # 평균 탄소배출량
-    avg_carbon = df["탄소배출량"].mean()
-    return f"{avg_carbon:.3f} tCO₂"
-
-def get_main_work_type_info(df):
-    # 가장 많은 작업유형
-    main_work_type = df["작업유형"].mode().iloc[0]
-    return main_work_type
-
-def get_monthly_change_info(df, selected_month):
-    # 전월 대비 증감률 계산
-    current_sum = df["전기요금"].sum()
-    
-    # 전월 데이터 로드
-    prev_month_start = pd.to_datetime(f"{selected_month}-01") - timedelta(days=1)
-    prev_month_end = prev_month_start.replace(day=1)
-    prev_month_data = df[(df["측정일시"] >= prev_month_start) & (df["측정일시"] < prev_month_end)]
-    prev_sum = prev_month_data["전기요금"].sum()
-
-    # 증감률 계산
-    change_rate = (current_sum - prev_sum) / prev_sum * 100 if prev_sum else 0
-    return f"{change_rate:+.1f}%"
-
-# 2) 템플릿에 넣을 값 계산
-def generate_report_with_dynamic_data(df, selected_month):
-    # 데이터에서 동적으로 값 계산
-    peak_cost_info = get_peak_cost_info(df)
-    avg_carbon_info = get_avg_carbon_info(df)
-    main_work_type_info = get_main_work_type_info(df)
-    monthly_change_info = get_monthly_change_info(df, selected_month)
-
 # ✅ 컬럼명 일괄 매핑
 if "전력사용량(kWh)" in test_df.columns:
     test_df["전력사용량"] = test_df["전력사용량(kWh)"]
@@ -426,6 +386,68 @@ if "전기요금(원)" in test_df.columns:
 if "탄소배출량(tCO2)" in test_df.columns:
     test_df["탄소배출량"] = test_df["탄소배출량(tCO2)"]
 
+
+
+# 공통: 컬럼 자동 탐색
+def _find_col(df, patterns):
+    """
+    df 안에서 patterns 리스트 내 키워드가 들어간 첫 번째 컬럼명을 반환.
+    없으면 None.
+    """
+    for pat in patterns:
+        for col in df.columns:
+            if pat in col:
+                return col
+    return None
+
+# 1) 실제 데이터로부터 필요한 값을 계산
+def get_peak_cost_info(df):
+    cost_col = _find_col(df, ["전기요금", "cost"])
+    date_col = _find_col(df, ["측정일시", "datetime"])
+    if cost_col is None or date_col is None:
+        return "데이터 없음"
+    peak_idx  = df[cost_col].idxmax()
+    peak_row  = df.loc[peak_idx]
+    peak_cost = peak_row[cost_col]
+    peak_date = peak_row[date_col]
+    return f"₩{peak_cost:,.0f} (발생일시: {peak_date:%Y-%m-%d %H:%M})"
+
+def get_avg_carbon_info(df):
+    carbon_col = _find_col(df, ["탄소배출량", "co2"])
+    if carbon_col is None:
+        return "데이터 없음"
+    avg_carbon = df[carbon_col].mean()
+    return f"{avg_carbon:.3f} tCO₂"
+
+def get_main_work_type_info(df):
+    if "작업유형" not in df.columns or df["작업유형"].empty:
+        return "데이터 없음"
+    return df["작업유형"].mode().iloc[0]
+
+def get_monthly_change_info(df, selected_month):
+    cost_col = _find_col(df, ["전기요금", "cost"])
+    date_col = _find_col(df, ["측정일시", "datetime"])
+    if cost_col is None or date_col is None:
+        return "데이터 없음"
+
+    current_sum = df[cost_col].sum()
+
+    # 전월 데이터 기간 계산
+    sel_start = pd.to_datetime(f"{selected_month}-01")
+    prev_month_end = sel_start - timedelta(days=1)
+    prev_month_start = prev_month_end.replace(day=1)
+
+    prev_df = df[
+        (df[date_col] >= prev_month_start) &
+        (df[date_col] <= prev_month_end)
+    ]
+    prev_sum = prev_df[cost_col].sum()
+
+    if prev_sum == 0:
+        return "+0.0%"
+
+    change_rate = (current_sum - prev_sum) / prev_sum * 100
+    return f"{change_rate:+.1f}%"
 
 # CSS 스타일 정의
 css_style = """
@@ -1212,6 +1234,7 @@ def server(input, output, session):
         d = summary_data()
         if d.empty:
             raise ValueError("📂 데이터 없음")
+        
 
         # 2) 차트 생성용 원본·파라미터
         current_df = d.copy()                  # 실 데이터를 쓰는 df
@@ -1236,12 +1259,11 @@ def server(input, output, session):
         fig3.write_image(img3, width=600, height=300)
 
         # 6) 동적으로 값 계산 (예: 최고 요금, 평균 탄소배출량 등)
-        peak_cost_info = get_peak_cost_info(d)  # 최고 요금 정보 계산 함수
-        avg_carbon_info = get_avg_carbon_info(d)  # 평균 탄소배출량 계산 함수
-        main_work_type_info = get_main_work_type_info(d)  # 주요 작업 유형 계산 함수
-        monthly_change_info = get_monthly_change_info(d, sel_month)  # 전월 대비 증감률 계산 함수
-
-
+        peak_cost_info      = get_peak_cost_info(d)
+        avg_carbon_info     = get_avg_carbon_info(d)
+        main_work_type_info = get_main_work_type_info(d)
+        monthly_change_info = get_monthly_change_info(d, sel_month)
+        
         # 7) 워드 템플릿에 넘길 context 구성
         context = {
             "customer_name":      "홍길동",

@@ -45,7 +45,7 @@ def generate_report(context: dict) -> Path:
         context["graph2"] = InlineImage(
             doc,
             str(context["graph2_path"]),
-            width=Mm(1350),
+            width=Mm(135),
             height=Mm(77),
         )
         del context["graph2_path"]
