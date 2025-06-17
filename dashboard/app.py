@@ -1076,13 +1076,303 @@ ui.div(
 )
 
 ),
-    # ────────────────────
+# ────────────────────
     # TAB 3: 부록
     # ────────────────────
     ui.nav_panel(
         "부록",
-        ui.h3("📚 부록")
+        ui.div(
+            ui.h3("📎 Appendix: 전기요금 예측 모델 개발 및 성능 향상 전처리 전략", 
+                  style="color: #2c3e50; text-align: center; margin-bottom: 30px;"),
+            
+            # A1. 데이터 개요
+            ui.div(
+                ui.h4("📌 A1. 데이터 개요", class_="section-header"),
+                ui.div(
+                    ui.tags.ul(
+                        ui.tags.li(ui.tags.strong("학습 데이터 ("), ui.tags.code("train.csv"), ui.tags.strong(") 및 테스트 데이터 ("), ui.tags.code("test.csv"), ui.tags.strong(")"), "는 15분 단위 전력 사용 이력과 환경정보 포함"),
+                        ui.tags.li(ui.tags.strong("예측 타깃: "), ui.tags.code("전기요금(원)"), " 단일 목표 변수 예측")
+                    ),
+                    class_="chart-container",
+                    style="padding: 20px;"
+                )
+            ),
+            
+            # A2. 전처리를 통한 성능 향상 전략
+            ui.div(
+                ui.h4("📌 A2. 전처리를 통한 성능 향상 전략", class_="section-header"),
+                
+                # A2-1. 시간 파생 변수 및 주기 인코딩
+                ui.div(
+                    ui.h5("🔷 A2-1. 시간 파생 변수 및 주기 인코딩", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.div(
+                        ui.tags.table(
+                            ui.tags.thead(
+                                ui.tags.tr(
+                                    ui.tags.th("변수", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;"),
+                                    ui.tags.th("설명", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;"),
+                                    ui.tags.th("성능 기여", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;")
+                                )
+                            ),
+                            ui.tags.tbody(
+                                ui.tags.tr(
+                                    ui.tags.td(ui.tags.code("월, 일, 시간, 요일, 주말여부"), style="padding: 8px; border: 1px solid #ddd;"),
+                                    ui.tags.td("시간 구조 반영", style="padding: 8px; border: 1px solid #ddd;"),
+                                    ui.tags.td("요금과 계절/패턴 간 연관 반영", style="padding: 8px; border: 1px solid #ddd;")
+                                ),
+                                ui.tags.tr(
+                                    ui.tags.td(ui.tags.code("sin_시간, cos_시간"), style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;"),
+                                    ui.tags.td("시간의 주기성 표현", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;"),
+                                    ui.tags.td("주기 구조를 부드럽게 인식 가능 (특히 LSTM에 유리)", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;")
+                                )
+                            ),
+                            style="width: 100%; border-collapse: collapse; margin-bottom: 20px;"
+                        ),
+                        class_="chart-container"
+                    )
+                ),
+                
+                # A2-2. 시간대 기반 요금단가 계산
+                ui.div(
+                    ui.h5("🔷 A2-2. 시간대 기반 요금단가 계산 (", ui.tags.code("요금단가"), ")", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.div(
+                        ui.tags.ul(
+                            ui.tags.li("계절, 시간대, 요금 정책 개편 시점을 반영한 실질 단가"),
+                            ui.tags.li("전기요금의 구조적 요인 반영 → 예측 정밀도 향상")
+                        ),
+                        class_="chart-container",
+                        style="padding: 15px;"
+                    )
+                ),
+                
+                # A2-3. Target Encoding 기반 통계적 인코딩
+                ui.div(
+                    ui.h5("🔷 A2-3. Target Encoding 기반 통계적 인코딩", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.div(
+                        ui.tags.table(
+                            ui.tags.thead(
+                                ui.tags.tr(
+                                    ui.tags.th("변수명", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;"),
+                                    ui.tags.th("설명", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;")
+                                )
+                            ),
+                            ui.tags.tbody(
+                                ui.tags.tr(
+                                    ui.tags.td(ui.tags.code("작업유형_te"), style="padding: 8px; border: 1px solid #ddd;"),
+                                    ui.tags.td("각 작업유형별 평균 전기요금 반영", style="padding: 8px; border: 1px solid #ddd;")
+                                ),
+                                ui.tags.tr(
+                                    ui.tags.td(ui.tags.code("시간_te"), style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;"),
+                                    ui.tags.td("시간대별 평균 요금 반영", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;")
+                                ),
+                                ui.tags.tr(
+                                    ui.tags.td(ui.tags.code("요일_te"), style="padding: 8px; border: 1px solid #ddd;"),
+                                    ui.tags.td("요일별 평균 요금 반영", style="padding: 8px; border: 1px solid #ddd;")
+                                ),
+                                ui.tags.tr(
+                                    ui.tags.td(ui.tags.code("시간대_te"), style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;"),
+                                    ui.tags.td("최대/중간/경부하 구간별 평균 요금 반영", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;")
+                                )
+                            ),
+                            style="width: 100%; border-collapse: collapse; margin-bottom: 20px;"
+                        ),
+                        class_="chart-container"
+                    )
+                ),
+                
+                # A2-4. 이상치 제거
+                ui.div(
+                    ui.h5("🔷 A2-4. 이상치 제거 (IQR 기반)", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.div(
+                        ui.tags.ul(
+                            ui.tags.li(ui.tags.code("전기요금(원)"), "의 이상치를 제거하여 학습 안정성 확보")
+                        ),
+                        class_="chart-container",
+                        style="padding: 15px;"
+                    )
+                ),
+                
+                # A2-5. 스케일링 분리 적용
+                ui.div(
+                    ui.h5("🔷 A2-5. 스케일링 분리 적용", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.div(
+                        ui.tags.table(
+                            ui.tags.thead(
+                                ui.tags.tr(
+                                    ui.tags.th("모델군", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;"),
+                                    ui.tags.th("스케일러", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;"),
+                                    ui.tags.th("목적", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;")
+                                )
+                            ),
+                            ui.tags.tbody(
+                                ui.tags.tr(
+                                    ui.tags.td("Tree 계열", style="padding: 8px; border: 1px solid #ddd;"),
+                                    ui.tags.td(ui.tags.code("RobustScaler"), style="padding: 8px; border: 1px solid #ddd;"),
+                                    ui.tags.td("이상치에 강건한 정규화", style="padding: 8px; border: 1px solid #ddd;")
+                                ),
+                                ui.tags.tr(
+                                    ui.tags.td("LSTM", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;"),
+                                    ui.tags.td(ui.tags.code("MinMaxScaler"), style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;"),
+                                    ui.tags.td("시계열 학습 안정성 확보 (0~1 정규화 필수)", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;")
+                                )
+                            ),
+                            style="width: 100%; border-collapse: collapse; margin-bottom: 20px;"
+                        ),
+                        class_="chart-container"
+                    )
+                )
+            ),
+            
+            # A3. 모델별 구조 및 전략
+            ui.div(
+                ui.h4("📌 A3. 모델별 구조 및 전략", class_="section-header"),
+                ui.div(
+                    ui.tags.table(
+                        ui.tags.thead(
+                            ui.tags.tr(
+                                ui.tags.th("모델", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;"),
+                                ui.tags.th("특성", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;"),
+                                ui.tags.th("역할", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;")
+                            )
+                        ),
+                        ui.tags.tbody(
+                            ui.tags.tr(
+                                ui.tags.td("XGBoost / LGBM / RF", style="padding: 8px; border: 1px solid #ddd;"),
+                                ui.tags.td("고차원 변수 처리", style="padding: 8px; border: 1px solid #ddd;"),
+                                ui.tags.td("구조적 전처리 조합과 궁합 우수", style="padding: 8px; border: 1px solid #ddd;")
+                            ),
+                            ui.tags.tr(
+                                ui.tags.td("LSTM", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;"),
+                                ui.tags.td("시계열 입력 (96×7)", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;"),
+                                ui.tags.td("주기/패턴 학습을 통한 정밀 예측", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;")
+                            )
+                        ),
+                        style="width: 100%; border-collapse: collapse; margin-bottom: 15px;"
+                    ),
+                    ui.tags.ul(
+                        ui.tags.li("각 모델의 ", ui.tags.code("R² Score"), "에 따라 ", ui.tags.strong("가중 앙상블 수행")),
+                        ui.tags.li("LSTM + Tree 기반 모델의 상호 보완 구조")
+                    ),
+                    class_="chart-container",
+                    style="padding: 20px;"
+                )
+            ),
+            
+            # A4. 하이퍼파라미터 최적화 전략
+            ui.div(
+                ui.h4("📌 A4. 하이퍼파라미터 최적화 전략", class_="section-header"),
+                ui.div(
+                    ui.tags.div(
+                        ui.tags.h6("• 트리 기반 모델(XGB, LGBM, RF):", style="color: #2c3e50; font-weight: bold;"),
+                        ui.tags.ul(
+                            ui.tags.li("수작업 튜닝 + 경험적 값 고정 (", ui.tags.code("n_estimators, max_depth, learning_rate, subsample, colsample_bytree"), " 등)"),
+                            ui.tags.li("탐색 공간을 제한하여 오버튜닝 방지 및 재현성 확보")
+                        ),
+                        style="margin-bottom: 20px;"
+                    ),
+                    ui.tags.div(
+                        ui.tags.h6("• LSTM:", style="color: #2c3e50; font-weight: bold;"),
+                        ui.tags.ul(
+                            ui.tags.li("단층 구조 (", ui.tags.code("LSTM(64) → Dense(32) → Dense(1)"), ")"),
+                            ui.tags.li(ui.tags.code("batch_size=32, epochs=20, EarlyStopping(patience=5)"), " 설정"),
+                            ui.tags.li(ui.tags.code("Dropout"), "은 미사용 (모델 일반화 성능 확인 후 제외)")
+                        ),
+                        style="margin-bottom: 15px;"
+                    ),
+                    ui.tags.p("※ 추가적인 Optuna, GridSearch 등의 자동화 튜닝은 향후 확장 가능성으로 고려됨", 
+                             style="color: #7f8c8d; font-style: italic;"),
+                    class_="chart-container",
+                    style="padding: 20px;"
+                )
+            ),
+            
+            # A5. 예측 결과 및 저장 산출물
+            ui.div(
+                ui.h4("📌 A5. 예측 결과 및 저장 산출물", class_="section-header"),
+                ui.div(
+                    ui.tags.ul(
+                        ui.tags.li(ui.tags.code("submission_optimal.csv"), ": 앙상블 기반 전기요금 예측 결과 저장")
+                    ),
+                    class_="chart-container",
+                    style="padding: 20px;"
+                )
+            ),
+            
+            # A6. 저장된 모델
+            ui.div(
+                ui.h4("📌 A6. 저장된 모델", class_="section-header"),
+                ui.div(
+                    ui.tags.table(
+                        ui.tags.thead(
+                            ui.tags.tr(
+                                ui.tags.th("파일명", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;"),
+                                ui.tags.th("설명", style="background-color: #E0E0E0; color: black; padding: 10px; border: 1px solid #ddd;")
+                            )
+                        ),
+                        ui.tags.tbody(
+                            ui.tags.tr(
+                                ui.tags.td(ui.tags.code("xgb.pkl, lgb.pkl, rf.pkl"), style="padding: 8px; border: 1px solid #ddd;"),
+                                ui.tags.td("트리 계열 학습 모델", style="padding: 8px; border: 1px solid #ddd;")
+                            ),
+                            ui.tags.tr(
+                                ui.tags.td(ui.tags.code("lstm.pkl"), style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;"),
+                                ui.tags.td("학습된 시계열 모델", style="padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa;")
+                            ),
+                            ui.tags.tr(
+                                ui.tags.td(ui.tags.code("scaler.pkl, seq_scaler.pkl"), style="padding: 8px; border: 1px solid #ddd;"),
+                                ui.tags.td("입력 스케일러 객체 저장용", style="padding: 8px; border: 1px solid #ddd;")
+                            )
+                        ),
+                        style="width: 100%; border-collapse: collapse;"
+                    ),
+                    class_="chart-container",
+                    style="padding: 20px;"
+                )
+            ),
+            
+            # A7. 모델 선택을 위한 성능 평가
+            ui.div(
+                ui.h4("📌 A7. 모델 선택을 위한 성능 평가", class_="section-header"),
+                ui.div(
+                    ui.tags.div(
+                        ui.tags.h6("🧪 실사용 성능을 고려한 평가 절차:", style="color: #2c3e50; font-weight: bold; margin-bottom: 10px;"),
+                        ui.tags.ul(
+                            ui.tags.li(ui.tags.strong("학습"), ": 1월 ~ 10월 데이터를 기반으로 모델 학습"),
+                            ui.tags.li(ui.tags.strong("검증"), ": 11월 데이터를 예측하고 실제 ", ui.tags.code("전기요금(원)"), "과 비교"),
+                            ui.tags.li(ui.tags.strong("지표"), ": ", ui.tags.code("Mean Absolute Error (MAE)"), "를 주요 기준으로 사용")
+                        ),
+                        style="margin-bottom: 20px;"
+                    ),
+                    ui.tags.div(
+                        ui.tags.h6("🏆 모델 선정 기준:", style="color: #2c3e50; font-weight: bold; margin-bottom: 10px;"),
+                        ui.tags.ul(
+                            ui.tags.li("Tree 기반 모델과 LSTM, 그리고 두 모델의 앙상블 결과를 비교"),
+                            ui.tags.li("앙상블 모델이 11월 전체에 대해 ", ui.tags.strong("가장 낮은 MAE를 기록"), "하여 최종 예측 모델로 선택됨")
+                        )
+                    ),
+                    class_="chart-container",
+                    style="padding: 20px;"
+                )
+            ),
+            
+            # 핵심 요약
+            ui.div(
+                ui.h4("✅ 핵심 요약", class_="section-header"),
+                ui.div(
+                    ui.tags.p(
+                        "본 모델은 시간 기반 요금 단가 계산, 범주형 변수에 대한 통계적 인코딩, 적절한 이상치 제거와 스케일링 전략 분리, 하이퍼파라미터 튜닝을 통한 구조 최적화, 그리고 11월 실측 기반 성능 검증을 통해 최종적으로 Tree + LSTM 앙상블 모델을 선택하였다.",
+                        style="font-size: 16px; line-height: 1.6; text-align: justify; background-color: #ecf0f1; padding: 20px; border-radius: 8px; border-left: 4px solid #3498db;"
+                    ),
+                    class_="chart-container",
+                    style="padding: 20px;"
+                    
+                )
+            ),
+            style="padding: 20px; max-width: 900px; margin: 0 auto;"
+            
+        )
     ),
+
 
     # 날씨를 가장 오른쪽에 배치하기 위해 nav_spacer와 nav_control 사용
     ui.nav_spacer(),  # 빈 공간을 만들어 오른쪽으로 밀어냄
