@@ -31,22 +31,22 @@ def generate_report(context: dict) -> Path:
     # 2) 생성일 추가
     context["generation_date"] = datetime.now().strftime("%Y-%m-%d")
 
-    # 3) 차트 이미지를 InlineImage로 변환 & 키 정리
     if "graph1_path" in context:
         context["graph1"] = InlineImage(
             doc,
             str(context["graph1_path"]),
-            width=Mm(140),    # 너비 140mm
-            height=Mm(80),    # 높이  80mm (원하면 조정)
+            width=Mm(82.6),  # 너비 8.26 cm (82.6 mm)
+            height=Mm(47.2),  # 높이 4.72 cm (47.2 mm)
         )
         del context["graph1_path"]
+
 
     if "graph2_path" in context:
         context["graph2"] = InlineImage(
             doc,
             str(context["graph2_path"]),
-            width=Mm(140),
-            height=Mm(80),
+            width=Mm(1350),
+            height=Mm(77),
         )
         del context["graph2_path"]
 
@@ -54,8 +54,8 @@ def generate_report(context: dict) -> Path:
         context["graph3"] = InlineImage(
             doc,
             str(context["graph3_path"]),
-            width=Mm(140),
-            height=Mm(80),
+            width=Mm(135),
+            height=Mm(77),
         )
         del context["graph3_path"]
 

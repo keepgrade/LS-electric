@@ -378,6 +378,45 @@ def make_monthly_summary_chart(df_full, sel_month: str):
     return fig
 
 
+# 1) 실제 데이터로부터 필요한 값을 계산
+def get_peak_cost_info(df):
+    # 최고 요금 정보: 전기요금이 가장 높은 행
+    peak_row = df.loc[df["전기요금"].idxmax()]
+    peak_cost = peak_row["전기요금"]
+    peak_date = peak_row["측정일시"]
+    return f"₩{peak_cost:,.0f} (발생일시: {peak_date:%Y-%m-%d %H:%M})"
+
+def get_avg_carbon_info(df):
+    # 평균 탄소배출량
+    avg_carbon = df["탄소배출량"].mean()
+    return f"{avg_carbon:.3f} tCO₂"
+
+def get_main_work_type_info(df):
+    # 가장 많은 작업유형
+    main_work_type = df["작업유형"].mode().iloc[0]
+    return main_work_type
+
+def get_monthly_change_info(df, selected_month):
+    # 전월 대비 증감률 계산
+    current_sum = df["전기요금"].sum()
+    
+    # 전월 데이터 로드
+    prev_month_start = pd.to_datetime(f"{selected_month}-01") - timedelta(days=1)
+    prev_month_end = prev_month_start.replace(day=1)
+    prev_month_data = df[(df["측정일시"] >= prev_month_start) & (df["측정일시"] < prev_month_end)]
+    prev_sum = prev_month_data["전기요금"].sum()
+
+    # 증감률 계산
+    change_rate = (current_sum - prev_sum) / prev_sum * 100 if prev_sum else 0
+    return f"{change_rate:+.1f}%"
+
+# 2) 템플릿에 넣을 값 계산
+def generate_report_with_dynamic_data(df, selected_month):
+    # 데이터에서 동적으로 값 계산
+    peak_cost_info = get_peak_cost_info(df)
+    avg_carbon_info = get_avg_carbon_info(df)
+    main_work_type_info = get_main_work_type_info(df)
+    monthly_change_info = get_monthly_change_info(df, selected_month)
 
 # ✅ 컬럼명 일괄 매핑
 if "전력사용량(kWh)" in test_df.columns:
@@ -386,6 +425,8 @@ if "전기요금(원)" in test_df.columns:
     test_df["전기요금"] = test_df["전기요금(원)"]
 if "탄소배출량(tCO2)" in test_df.columns:
     test_df["탄소배출량"] = test_df["탄소배출량(tCO2)"]
+
+
 # CSS 스타일 정의
 css_style = """
 <style>
@@ -1164,7 +1205,6 @@ def server(input, output, session):
             print(f"❌ monthly_change_info() 오류: {e}")
             return "⚠️ 분석 중 오류 발생"
 
-    
     @output
     @render.download(filename="LS_Electric_보고서.docx")
     def download_report():
@@ -1195,7 +1235,14 @@ def server(input, output, session):
         fig2.write_image(img2, width=600, height=300)
         fig3.write_image(img3, width=600, height=300)
 
-        # 6) 워드 템플릿에 넘길 context 구성
+        # 6) 동적으로 값 계산 (예: 최고 요금, 평균 탄소배출량 등)
+        peak_cost_info = get_peak_cost_info(d)  # 최고 요금 정보 계산 함수
+        avg_carbon_info = get_avg_carbon_info(d)  # 평균 탄소배출량 계산 함수
+        main_work_type_info = get_main_work_type_info(d)  # 주요 작업 유형 계산 함수
+        monthly_change_info = get_monthly_change_info(d, sel_month)  # 전월 대비 증감률 계산 함수
+
+
+        # 7) 워드 템플릿에 넘길 context 구성
         context = {
             "customer_name":      "홍길동",
             "billing_month":      sel_month.split("-")[1],
@@ -1209,6 +1256,10 @@ def server(input, output, session):
             "address":            "서울시 강남구 역삼동…",
             "previous_total_cost":"…",  # 필요 시 계산
             "contract_type":      "일반용 저압",
+            "peak_cost_info": peak_cost_info,
+            "avg_carbon_info": avg_carbon_info,
+            "main_work_type_info": main_work_type_info,
+            "monthly_change_info": monthly_change_info,
             # 차트 경로
             "graph1_path": img1,
             "graph2_path": img2,
@@ -1218,6 +1269,8 @@ def server(input, output, session):
         # 7) 보고서 생성
         report_path = generate_report(context)
         return open(report_path, "rb")
+
+
 
 
 
