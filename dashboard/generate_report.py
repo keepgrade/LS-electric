@@ -36,7 +36,7 @@ def generate_report(context: dict) -> Path:
             doc,
             str(context["graph1_path"]),
             width=Mm(82.6),  # 너비 8.26 cm (82.6 mm)
-            height=Mm(47.2),  # 높이 4.72 cm (47.2 mm)
+            height=Mm(42.2),  # 높이 4.72 cm (47.2 mm)
         )
         del context["graph1_path"]
 
@@ -45,8 +45,8 @@ def generate_report(context: dict) -> Path:
         context["graph2"] = InlineImage(
             doc,
             str(context["graph2_path"]),
-            width=Mm(135),
-            height=Mm(77),
+            width=Mm(154.9),
+            height=Mm(74),
         )
         del context["graph2_path"]
 
@@ -54,10 +54,19 @@ def generate_report(context: dict) -> Path:
         context["graph3"] = InlineImage(
             doc,
             str(context["graph3_path"]),
-            width=Mm(135),
-            height=Mm(77),
+            width=Mm(154.9),
+            height=Mm(74),
         )
         del context["graph3_path"]
+
+    if "graph4_path" in context:
+        context["graph4"] = InlineImage(
+            doc,
+            str(context["graph4_path"]),
+            width=Mm(154.9),
+            height=Mm(77),
+        )
+        del context["graph4_path"]
 
     # 4) 템플릿 렌더링
     doc.render(context)
