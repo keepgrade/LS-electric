@@ -22,12 +22,17 @@ warnings.filterwarnings("ignore")
 # 1) 경로 설정
 # ───────────────────────────────────────────────────────
 # app.py가 위치한 폴더를 기준으로 상대 경로 설정
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+BASE_DIR = Path(__file__).resolve().parent       # 👉 dashboard/
+DATA_DIR = BASE_DIR / "data"                     # 👉 dashboard/data/
 
+DF_FINAL = DATA_DIR / "df_final.csv"
 TRAIN_CSV = DATA_DIR / "train.csv"
 TEST_CSV = DATA_DIR / "test_predicted_december_data.csv"
-DF_FINAL = DATA_DIR / "df_final.csv"
+
+
+print("📂 BASE_DIR:", BASE_DIR)
+print("📂 DATA_DIR:", DATA_DIR)
+print("📄 DF_FINAL:", DF_FINAL)
 
 # 파일 존재 여부 검증 (선택적으로 사용 가능)
 for path in [TRAIN_CSV, TEST_CSV, DF_FINAL]:
@@ -721,31 +726,32 @@ def server(input, output, session):
     # ───────────────────────────────────────────────────────
     @reactive.Calc
     def summary_data():
-        # 📂 CSV 파일 경로 설정
-        base_dir = os.path.dirname(__file__)
-        file_path = os.path.abspath(os.path.join(base_dir, "..", "data", "df_final.csv"))
-
-        # ✅ CSV 파일 로드
-        df_final = pd.read_csv(file_path)
-
-        # ✅ 날짜 형식 변환
-        if "측정일시" not in df_final.columns:
-            raise KeyError("❌ '측정일시' 컬럼이 없습니다.")
-        df_final["측정일시"] = pd.to_datetime(df_final["측정일시"], errors="coerce")
-
-        df2 = df_final.copy()
-
-        # ✅ 유저가 선택한 월 필터링
         try:
-            selected_month = input.selected_month()  # 예: "2024-05"
+            base_dir = os.path.dirname(__file__)
+            file_path = os.path.abspath(os.path.join(base_dir, ".", "data", "df_final.csv"))
+            df_final = pd.read_csv(file_path)
+
+            if "측정일시" not in df_final.columns:
+                raise KeyError("❌ '측정일시' 컬럼이 없습니다.")
+            df_final["측정일시"] = pd.to_datetime(df_final["측정일시"], errors="coerce")
+
+            df2 = df_final.copy()
+
+            selected_month = input.selected_month()
+            if not selected_month:
+                print("⛔ 선택된 월 없음. 기본값 반환")
+                return df2
+
             start = pd.to_datetime(selected_month + "-01")
-            end = start + pd.offsets.MonthEnd(0)  # 해당 월의 마지막 날 계산
-
+            end = start + pd.offsets.MonthEnd(0)
             df2 = df2[(df2["측정일시"] >= start) & (df2["측정일시"] <= end)]
-        except Exception as e:
-            print("⛔ 날짜 필터 적용 중 오류:", e)
 
-        return df2
+            return df2
+
+        except Exception as e:
+            print(f"❌ summary_data() 실행 중 오류: {e}")
+            return pd.DataFrame()
+
 
 
     # ───────────────────────────────────────────────────────
@@ -1121,26 +1127,43 @@ def server(input, output, session):
     @output
     @render.text
     def monthly_change_info():
-        d = summary_data()
-        if d.empty:
-            return "데이터 없음" ###
+        try:
+            # ✅ 현재 선택된 월의 데이터
+            d = summary_data()
+            if d.empty or "측정일시" not in d.columns or "전기요금(원)" not in d.columns:
+                return "📭 데이터 없음"
 
-        cur_sum = d["전기요금(원)"].sum()
-        min_date = d["측정일시"].min()
-        prev_cutoff = min_date - timedelta(days=30)
+            cur_sum = d["전기요금(원)"].sum()
+            min_date = d["측정일시"].min()
 
-        # ✅ 같은 소스로부터 전체 데이터 재로딩 (df 대신)
-        base_dir = os.path.dirname(__file__)
-        file_path = os.path.abspath(os.path.join(base_dir, "..", "data", "df_final.csv"))
-        df_full = pd.read_csv(BASE_DIR.parent / "data" / "df_final.csv")
+            if pd.isna(min_date):
+                return "⛔ 날짜 정보 없음"
 
-        df_full["측정일시"] = pd.to_datetime(df_full["측정일시"], errors="coerce")
+            prev_cutoff = min_date - timedelta(days=30)
 
-        prev = df_full[(df_full["측정일시"] >= prev_cutoff) & (df_full["측정일시"] < min_date)]
-        prev_sum = prev["전기요금(원)"].sum() if not prev.empty else cur_sum
+            # ✅ 전체 데이터 재로딩
+            base_dir = os.path.dirname(__file__)
+            file_path = os.path.join(base_dir, "data", "df_final.csv")
 
-        rate = (cur_sum - prev_sum) / prev_sum * 100 if prev_sum else 0
-        return f"{rate:+.1f}%"
+            if not os.path.exists(file_path):
+                return "❌ 전체 데이터 파일을 찾을 수 없습니다."
+
+            df_full = pd.read_csv(file_path)
+            if "측정일시" not in df_full.columns or "전기요금(원)" not in df_full.columns:
+                return "❌ 필요한 컬럼이 없습니다."
+
+            df_full["측정일시"] = pd.to_datetime(df_full["측정일시"], errors="coerce")
+            df_prev = df_full[(df_full["측정일시"] >= prev_cutoff) & (df_full["측정일시"] < min_date)]
+
+            prev_sum = df_prev["전기요금(원)"].sum() if not df_prev.empty else cur_sum
+            rate = (cur_sum - prev_sum) / prev_sum * 100 if prev_sum != 0 else 0
+
+            return f"{rate:+.1f}%"
+
+        except Exception as e:
+            print(f"❌ monthly_change_info() 오류: {e}")
+            return "⚠️ 분석 중 오류 발생"
+
     
     @output
     @render.download(filename="LS_Electric_보고서.docx")
