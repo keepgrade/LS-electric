@@ -46,7 +46,7 @@ def generate_report(context: dict) -> Path:
             doc,
             str(context["graph2_path"]),
             width=Mm(154.9),
-            height=Mm(77),
+            height=Mm(74),
         )
         del context["graph2_path"]
 
@@ -55,7 +55,7 @@ def generate_report(context: dict) -> Path:
             doc,
             str(context["graph3_path"]),
             width=Mm(154.9),
-            height=Mm(77),
+            height=Mm(74),
         )
         del context["graph3_path"]
 

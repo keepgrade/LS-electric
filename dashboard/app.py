@@ -1,22 +1,23 @@
 from shiny import App, render, ui, reactive
 from shinywidgets import render_widget, output_widget
-from plotly.graph_objects import FigureWidget
-from pandas.tseries.offsets import Week
-from pathlib import Path
 import os
 import asyncio
+import tempfile
+import warnings
+from pathlib import Path
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
-import plotly.express as px
-from plotly.subplots import make_subplots
-import tempfile
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-from generate_report import generate_report
-import warnings
-warnings.filterwarnings("ignore")
-import asyncio
 import requests
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.graph_objects import FigureWidget
+from plotly.subplots import make_subplots
+from pandas.tseries.offsets import Week
+from docxtpl import RichText
+from generate_report import generate_report
+# 경고 무시
+warnings.filterwarnings("ignore")
 
 # asyncio의 CancelledError 무시하는 방식
 def silence_cancelled_error():
@@ -182,7 +183,6 @@ def make_work_type_pie(df):
         fig = px.pie(
         names=cnt.index,
         values=cnt.values,
-        color="작업유형",  
         color_discrete_map={
             "Light_Load": "#90ee90",    # 연파랑
             "Medium_Load": "#87cefa",   # 초록
@@ -582,6 +582,120 @@ def get_weather(lat=36.65446, lon=127.4500):
     except Exception as e:
         return f"❌ 예외 발생: {e}"
 
+def build_summary_plain(d, sel_month, full_df):
+    import pandas as pd
+
+    # 1) 이번 달 집계
+    # — 컬럼 자동 탐색
+    date_col  = next((c for c in d.columns if "일시" in c or "datetime" in c), None)
+    usage_col = next((c for c in d.columns if "전력사용량" in c or "power" in c.lower()), None)
+    cost_col  = next((c for c in d.columns if "전기요금" in c or "cost" in c.lower()), None)
+    if date_col is None or usage_col is None or cost_col is None:
+        return "데이터 컬럼이 올바르지 않습니다."
+
+    # — 현재 월 합계
+    usage     = d[usage_col].sum()
+    cost      = d[cost_col].sum()
+    # — 피크 시간
+    peak_idx  = d[cost_col].idxmax()
+    peak_time = pd.to_datetime(d.loc[peak_idx, date_col])
+
+    # — 야간 비율
+    hours = d[date_col].dt.hour
+    is_night = hours.ge(20) | hours.lt(6)
+    night_ratio = is_night.mean()
+
+    # 2) 이전 달 기준치 계산
+    # — full_df 날짜 컬럼 변환
+    ff = full_df.copy()
+    ff[date_col] = pd.to_datetime(ff[date_col], errors="coerce")
+
+    this_start = pd.to_datetime(f"{sel_month}-01")
+    prev_start = (this_start - pd.offsets.MonthEnd(1)).replace(day=1)
+    prev_end   = prev_start + pd.offsets.MonthEnd(0)
+
+    prev = ff[(ff[date_col] >= prev_start) & (ff[date_col] <= prev_end)]
+    prev_usage = prev[usage_col].sum() if not prev.empty else 0.0
+    prev_cost  = prev[cost_col].sum()  if not prev.empty else 0.0
+
+    # 3) 증감률 & 이상 징후 여부
+    usage_rate = (usage - prev_usage) / prev_usage * 100 if prev_usage else 0.0
+    cost_rate  = (cost  - prev_cost ) / prev_cost  * 100 if prev_cost  else 0.0
+    is_anomaly = abs(usage_rate) > 15 or abs(cost_rate) > 20 or night_ratio > 0.6 or night_ratio < 0.2
+
+    # 4) 포맷팅
+    def fmt_rate(label, rate):
+        arrow = "🔺" if rate > 0 else "🔻"
+        return f"{arrow} {label} {rate:+.1f}%"
+
+    summary = (
+        "🧾 이번 달 리포트 요약\n"
+        f"- 전력사용량: {usage:,.0f} kWh\n"
+        f"- 전기요금: ₩{cost:,.0f}\n"
+        f"- 전월 대비: {fmt_rate('사용량', usage_rate)}, {fmt_rate('요금', cost_rate)}\n"
+        f"- 피크 시간: {peak_time:%Y-%m-%d %H:%M}\n"
+        f"- 야간 사용 비율: {night_ratio*100:.1f}%\n"
+        f"{'⚠️ 이상 징후 관측됨' if is_anomaly else '✅ 이상 징후 없음'}"
+    )
+
+    return summary
+
+
+
+def build_summary_rich(d: pd.DataFrame, sel_month: str, full_df: pd.DataFrame) -> RichText:
+    """
+    d           : 이번 달 데이터 (summary_data())
+    sel_month   : "YYYY-MM" 형식의 선택된 월
+    full_df     : 전체 데이터프레임 (final_df)
+    반환값      : DocxTemplate에 전달할 RichText 객체
+    """
+    # --- 1) 이번 달 집계치 계산 ---
+    # 사용량, 요금, 피크 발생 시각
+    usage     = d.filter(like="전력사용량").sum().iloc[0]
+    cost      = d.filter(like="전기요금").sum().iloc[0]
+    peak_idx  = d.filter(like="전기요금").idxmax()[0]
+    peak_time = pd.to_datetime(d.loc[peak_idx, d.filter(like="측정일시").columns[0]])
+
+    # 야간 비율
+    hours = d[d.filter(like="측정일시").columns[0]].dt.hour
+    night_ratio = ((hours >= 20) | (hours < 6)).mean()
+
+    # --- 2) 이전 달 집계치 계산 ---
+    this_start = pd.to_datetime(f"{sel_month}-01")
+    prev_start = (this_start - pd.offsets.MonthEnd(1)).replace(day=1)
+    prev_end   = prev_start + pd.offsets.MonthEnd(0)
+
+    df_prev = full_df.copy()
+    df_prev["측정일시"] = pd.to_datetime(df_prev["측정일시"], errors="coerce")
+    mask = (df_prev["측정일시"] >= prev_start) & (df_prev["측정일시"] <= prev_end)
+    df_prev = df_prev.loc[mask]
+
+    usage_col = next((c for c in df_prev.columns if "전력사용량" in c), None)
+    cost_col  = next((c for c in df_prev.columns if "전기요금" in c), None)
+    prev_usage = df_prev[usage_col].sum() if usage_col else 0
+    prev_cost  = df_prev[cost_col].sum()  if cost_col  else 0
+
+    # --- 3) 증감률 및 이상 징후 판단 ---
+    usage_rate = (usage - prev_usage) / prev_usage * 100 if prev_usage else 0
+    cost_rate  = (cost  - prev_cost ) / prev_cost  * 100 if prev_cost  else 0
+    is_anomaly = abs(usage_rate) > 15 or abs(cost_rate) > 20 or night_ratio > 0.6 or night_ratio < 0.2
+
+    # --- 4) RichText 객체 생성 ---
+    rt = RichText()
+    rt.add("🧾 이번 달 리포트 요약\n", bold=True)
+    rt.add(f"- 전력사용량: {usage:,.0f} kWh\n")
+    rt.add(f"- 전기요금: ₩{cost:,.0f}\n")
+    rt.add(f"- 전월 대비 사용량 {usage_rate:+.1f}% / 요금 {cost_rate:+.1f}%\n")
+    rt.add(f"- 피크 시간: {peak_time:%Y-%m-%d %H:%M}\n")
+    rt.add(f"- 야간 사용 비율: {night_ratio*100:.1f}%\n")
+    if is_anomaly:
+        rt.add("⚠️ 이상 징후 관측됨", color="red", bold=True)
+    else:
+        rt.add("✅ 이상 징후 없음", color="green", bold=True)
+
+    return rt
+
+
 # CSS 스타일 정의
 css_style = """
 <style>
@@ -808,10 +922,10 @@ app_ui = ui.page_navbar(
         ui.layout_sidebar(
             ui.sidebar(
                 ui.div(
-                    ui.h4("📊 실시간 모니터링", style="color: #2c3e50; margin-bottom: 20px;"),
+                    ui.h4(" 실시간 모니터링", style="color: #2c3e50; margin-bottom: 20px;"),
                     ui.input_date_range(
                         "date_range_monitoring",
-                        "📅 기간 선택:",
+                        "기간 선택:",
                         start=test_df["측정일시"].min().strftime("%Y-%m-%d"),
                         end=test_df["측정일시"].max().strftime("%Y-%m-%d"),
                         format="yyyy-mm-dd"
@@ -819,7 +933,7 @@ app_ui = ui.page_navbar(
                     ui.br(),
                     ui.input_selectize(
                         "metrics_select",
-                        "📈 표시할 지표:",
+                        "표시할 지표:",
                         choices={
                             "전력사용량": "전력사용량 (kWh)", 
                             "전기요금": "전기요금 (원)"
@@ -869,14 +983,14 @@ app_ui = ui.page_navbar(
                         ui.row(
                             ui.column(6,
                                 ui.div(
-                                    ui.h5("🔋 실시간 누적 전력사용량", style="color: #2c3e50;"),
+                                    ui.h5("실시간 누적 전력사용량", style="color: #2c3e50;"),
                                     ui.output_ui("power_progress_bars"),
                                     style="padding: 15px;"
                                 )
                             ),
                             ui.column(6,
                                 ui.div(
-                                    ui.h5("💰 실시간 누적 전기요금", style="color: #2c3e50;"),
+                                    ui.h5("실시간 누적 전기요금", style="color: #2c3e50;"),
                                     ui.output_ui("cost_progress_bars"),
                                     style="padding: 15px;"
                                 )
@@ -915,7 +1029,7 @@ ui.div(
             ui.sidebar(
                 ui.input_select(
                     id="selected_month",
-                    label="📅 분석 월 선택:",
+                    label="분석 월 선택:",
                     choices=[f"2024-{m:02d}" for m in range(1, 13)],
                     selected="2024-05"
                 ),
@@ -982,7 +1096,7 @@ ui.div(
                 ui.sidebar(
                     ui.input_radio_buttons(
                         id="aggregation_unit",
-                        label="🕒 집계 단위 선택:",
+                        label="집계 단위 선택:",
                         choices={
                             "hour": "시간대별",
                             "day": "일별",
@@ -1006,7 +1120,7 @@ ui.div(
         ui.div(
             ui.div(
                 ui.div(
-                    ui.span("💰", class_="card-icon"),
+                    ui.span("", class_="card-icon"),
                     ui.h5("최고 요금 정보", class_="card-title"),
                     class_="card-header-custom"
                 ),
@@ -1018,7 +1132,7 @@ ui.div(
             ),
             ui.div(
                 ui.div(
-                    ui.span("🌿", class_="card-icon"),
+                    ui.span("", class_="card-icon"),
                     ui.h5("평균 탄소배출량", class_="card-title"),
                     class_="card-header-custom"
                 ),
@@ -1034,7 +1148,7 @@ ui.div(
         ui.div(
             ui.div(
                 ui.div(
-                    ui.span("⚙️", class_="card-icon"),
+                    ui.span("", class_="card-icon"),
                     ui.h5("주요 작업 유형", class_="card-title"),
                     class_="card-header-custom"
                 ),
@@ -1046,7 +1160,7 @@ ui.div(
             ),
             ui.div(
                 ui.div(
-                    ui.span("📊", class_="card-icon"),
+                    ui.span("", class_="card-icon"),
                     ui.h5("전월 대비 증감률", class_="card-title"),
                     class_="card-header-custom"
                 ),
@@ -1069,20 +1183,21 @@ ui.div(
     )
     ),
     ui.div(
-        ui.input_action_button("download_pdf", "📄 PDF 보고서 다운로드", class_="btn-success btn-lg"),
-        class_="text-center",
-        style="margin-bottom: 40px;"
+    ui.download_button("download_report", "📄 Word 보고서 다운로드", class_="btn-success btn-lg"),
+    class_="text-center"
     )
 )
 
 ),
-# ────────────────────
+
+
+    # ────────────────────
     # TAB 3: 부록
     # ────────────────────
     ui.nav_panel(
         "부록",
         ui.div(
-            ui.h3("📎 Appendix: 전기요금 예측 모델 개발 및 성능 향상 전처리 전략", 
+            ui.h3("Appendix: 전기요금 예측 모델 개발 및 성능 향상 전처리 전략", 
                   style="color: #2c3e50; text-align: center; margin-bottom: 30px;"),
             
             # A1. 데이터 개요
@@ -1134,7 +1249,7 @@ ui.div(
                 
                 # A2-2. 시간대 기반 요금단가 계산
                 ui.div(
-                    ui.h5("🔷 A2-2. 시간대 기반 요금단가 계산 (", ui.tags.code("요금단가"), ")", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.h5(" A2-2. 시간대 기반 요금단가 계산 (", ui.tags.code("요금단가"), ")", style="color: #34495e; margin-bottom: 15px;"),
                     ui.div(
                         ui.tags.ul(
                             ui.tags.li("계절, 시간대, 요금 정책 개편 시점을 반영한 실질 단가"),
@@ -1147,7 +1262,7 @@ ui.div(
                 
                 # A2-3. Target Encoding 기반 통계적 인코딩
                 ui.div(
-                    ui.h5("🔷 A2-3. Target Encoding 기반 통계적 인코딩", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.h5("A2-3. Target Encoding 기반 통계적 인코딩", style="color: #34495e; margin-bottom: 15px;"),
                     ui.div(
                         ui.tags.table(
                             ui.tags.thead(
@@ -1379,7 +1494,7 @@ ui.div(
     ui.nav_control(ui.output_ui("navbar_weather")),  # 날씨를 오른쪽 끝에 배치
 
     # title은 단순하게 변경
-    title="⚡ LS Electric 전기요금 실시간 모니터링",
+    title="LS Electric 전기요금 실시간 모니터링",
     id="main_navbar"
 )
 
@@ -1428,8 +1543,8 @@ def server(input, output, session):
                 return df2
 
             start = pd.to_datetime(selected_month + "-01")
-            end = start + pd.offsets.MonthEnd(0)
-            df2 = df2[(df2["측정일시"] >= start) & (df2["측정일시"] <= end)]
+            end = start + pd.offsets.MonthEnd(0) + pd.Timedelta(days=1)  
+            df2 = df2[(df2["측정일시"] >= start) & (df2["측정일시"] < end)]
 
             return df2
 
@@ -1589,7 +1704,7 @@ def server(input, output, session):
     def card_cost():
         d = simulated_data()
         val = d["전기요금"].iloc[-1] if not d.empty else 0
-        return ui.div(ui.div(f"{val:,.0f}", class_="metric-value"), ui.div("원", class_="metric-label"), class_="metric-card cost-card")
+        return ui.div(ui.div(f"{val:,.0f}", class_="metric-value"), ui.div("전력요금(원)", class_="metric-label"), class_="metric-card cost-card")
 
     @output
     @render.ui
@@ -1597,7 +1712,7 @@ def server(input, output, session):
         d = simulated_data()
         val = d["탄소배출량"].iloc[-1] if not d.empty else 0
         val = abs(val) ## 인철 수정
-        return ui.div(ui.div(f"{val:,.0f}", class_="metric-value"), ui.div("CO₂", class_="metric-label"), class_="metric-card co2-card")
+        return ui.div(ui.div(f"{val:,.2f}", class_="metric-value"), ui.div("CO₂", class_="metric-label"), class_="metric-card co2-card")
 
     @output
     @render.ui
@@ -2238,7 +2353,7 @@ def server(input, output, session):
         if not usage_col or not cost_col:
             return "전력사용량/요금 컬럼 없음"
 
-        # 📊 집계
+        #  집계
         cur = df_full[(df_full["측정일시"] >= cur_start) & (df_full["측정일시"] <= cur_end)]
         prev = df_full[(df_full["측정일시"] >= prev_start) & (df_full["측정일시"] <= prev_end)]
 
@@ -2257,8 +2372,8 @@ def server(input, output, session):
             return f"{arrow} {rate:+.1f}%"
 
         return (
-            f"🔌 전력사용량: {format_rate(usage_rate)}\n"
-            f"💰 전기요금: {format_rate(cost_rate)}"
+            f" 전력사용량: {format_rate(usage_rate)}\n"
+            f" 전기요금: {format_rate(cost_rate)}"
     )
 
 
@@ -2266,19 +2381,20 @@ def server(input, output, session):
     @render.download(filename="LS_Electric_보고서.docx")
     def download_report():
         import pandas as pd
+        import tempfile
+        from datetime import timedelta
 
         # 1) 이번 달 데이터 불러오기
         d = summary_data()
         if d.empty:
             raise ValueError("📂 데이터 없음")
 
-        # 2) 차트 저장 (생략된 부분은 기존 코드 그대로)
+        # 2) 차트 저장
         fig1 = make_work_type_pie(d)
         fig2 = make_cost_trend_chart(d, input.aggregation_unit())
         fig3 = make_monthly_summary_chart(final_df, input.selected_month())
         fig4 = make_comparison_chart(final_df, input.selected_month(), "usage")
 
-        import tempfile
         img1 = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
         img2 = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
         img3 = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
@@ -2289,42 +2405,56 @@ def server(input, output, session):
         fig3.write_image(img3, width=600, height=300)
         fig4.write_image(img4, width=600, height=300)
 
-        # 3) 이번 달 시작/끝, 그리고 이전 달 기간 계산
-        sel_month   = input.selected_month()                   # e.g. "2024-05"
-        this_start  = pd.to_datetime(f"{sel_month}-01")
-        this_end    = this_start + pd.offsets.MonthEnd(0)
-        prev_start  = (this_start - pd.offsets.MonthEnd(1)).replace(day=1)
-        prev_end    = prev_start + pd.offsets.MonthEnd(0)
+        # 3) 이번 달/이전 달 기간 계산
+        sel_month  = input.selected_month()
+        this_start = pd.to_datetime(f"{sel_month}-01")
+        prev_start = (this_start - pd.offsets.MonthEnd(1)).replace(day=1)
 
-        # 4) 전체 데이터 프레임에서 이전 달 필터
+        # 4) 이전 달 데이터 합계
         df_full = final_df.copy()
         df_full["측정일시"] = pd.to_datetime(df_full["측정일시"], errors="coerce")
-
         prev_df = df_full[
             (df_full["측정일시"] >= prev_start) &
-            (df_full["측정일시"] <= prev_end)
+            (df_full["측정일시"] <  this_start)
         ]
-
-        # 5) 이전 달 합계 계산
         prev_usage = prev_df["전력사용량(kWh)"].sum()
         prev_cost  = prev_df["전기요금(원)"].sum()
 
-        # 6) 기타 동적 계산 정보
+        # 5) 주요 지표
         peak_cost_info      = get_peak_cost_info(d)
         avg_carbon_info     = get_avg_carbon_info(d)
         main_work_type_info = get_main_work_type_info(d)
         monthly_change_info = get_monthly_change_info(d)
 
-        # 7) Word 템플릿에 넘길 context 구성
+        # 6) summary_plain 생성 (dashboard와 동일 로직)
+        usage       = d["전력사용량(kWh)"].sum()
+        cost        = d["전기요금(원)"].sum()
+        peak_time   = pd.to_datetime(d.loc[d["전기요금(원)"].idxmax(), "측정일시"])
+        d["hour"]   = d["측정일시"].dt.hour
+        d["is_night"] = d["hour"].between(20,23) | d["hour"].between(0,5)
+        night_ratio = d["is_night"].mean()
+        usage_rate  = (usage - prev_usage) / prev_usage * 100 if prev_usage else 0
+        cost_rate   = (cost  - prev_cost ) / prev_cost  * 100 if prev_cost  else 0
+        anomaly_flag = abs(usage_rate)>15 or abs(cost_rate)>20 or night_ratio>0.6 or night_ratio<0.2
+
+        summary_plain = f"""🧾 이번 달 리포트 요약
+        - 전력사용량: {usage:,.0f} kWh
+        - 전기요금: ₩{cost:,.0f}
+        - 전월 대비 사용량 {usage_rate:+.1f}% / 요금 {cost_rate:+.1f}%
+        - 피크 요금 시간: {peak_time:%Y-%m-%d %H:%M}
+        - 야간 사용 비율: {night_ratio*100:.1f}%
+        {"⚠️ 이상 징후 관측됨" if anomaly_flag else "✅ 이상 징후 없음"}"""
+
+        # 7) context에 합치기
         context = {
             "customer_name":        "홍길동",
             "billing_month":        this_start.strftime("%m"),
             "customer_id":          "LS202405-01",
-            "total_cost":           f"{d['전기요금(원)'].sum():,.0f} 원",
+            "total_cost":           f"₩{cost:,.0f}",
             "usage_period":         f"{d['측정일시'].min():%Y-%m-%d} ~ {d['측정일시'].max():%Y-%m-%d}",
             "main_work_type":       d["작업유형"].mode().iloc[0],
             "previous_month":       prev_start.strftime("%m"),
-            "current_usage":        f"{d['전력사용량(kWh)'].sum():,.1f} kWh",
+            "current_usage":        f"{usage:,.1f} kWh",
             "previous_usage":       f"{prev_usage:,.1f} kWh",
             "address":              "서울시 강남구 역삼동…",
             "previous_total_cost":  f"₩{prev_cost:,.0f}",
@@ -2333,16 +2463,16 @@ def server(input, output, session):
             "avg_carbon_info":      avg_carbon_info,
             "main_work_type_info":  main_work_type_info,
             "monthly_change_info":  monthly_change_info,
-            # 차트 경로
+            "report_summary_text":  summary_plain,
             "graph1_path":          img1,
             "graph2_path":          img2,
             "graph3_path":          img3,
             "graph4_path":          img4,
         }
 
-        # 8) 보고서 생성 및 반환
+        # 8) 보고서 생성
         report_path = generate_report(context)
         return open(report_path, "rb")
 
-# 앱 실행
+# 앱 실
 app = App(app_ui, server)

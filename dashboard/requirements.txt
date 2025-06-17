@@ -5,4 +5,3 @@ kaleido
 pandas
 numpy
 docxtpl
-requests
