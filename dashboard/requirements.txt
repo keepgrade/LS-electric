@@ -1,4 +1,8 @@
-faicons
 shiny
-seaborn
+shinywidgets
+plotly
+kaleido
 pandas
+numpy
+docxtpl
+requests
