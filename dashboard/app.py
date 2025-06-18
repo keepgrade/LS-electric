@@ -629,7 +629,7 @@ def build_summary_plain(d, sel_month, full_df):
         return f"{arrow} {label} {rate:+.1f}%"
 
     summary = (
-        "🧾 이번 달 리포트 요약\n"
+        " 이번 달 리포트 요약\n"
         f"- 전력사용량: {usage:,.0f} kWh\n"
         f"- 전기요금: ₩{cost:,.0f}\n"
         f"- 전월 대비: {fmt_rate('사용량', usage_rate)}, {fmt_rate('요금', cost_rate)}\n"
@@ -682,7 +682,7 @@ def build_summary_rich(d: pd.DataFrame, sel_month: str, full_df: pd.DataFrame) -
 
     # --- 4) RichText 객체 생성 ---
     rt = RichText()
-    rt.add("🧾 이번 달 리포트 요약\n", bold=True)
+    rt.add(" 이번 달 리포트 요약\n", bold=True)
     rt.add(f"- 전력사용량: {usage:,.0f} kWh\n")
     rt.add(f"- 전기요금: ₩{cost:,.0f}\n")
     rt.add(f"- 전월 대비 사용량 {usage_rate:+.1f}% / 요금 {cost_rate:+.1f}%\n")
@@ -695,6 +695,24 @@ def build_summary_rich(d: pd.DataFrame, sel_month: str, full_df: pd.DataFrame) -
 
     return rt
 
+def calculate_power_factor_penalty(row, time_type):
+    cost = row["전기요금"]
+    penalty = 0.0
+
+    if time_type == "지상역률":
+        pf = row["지상역률(%)"]
+        if 60 <= pf < 90:
+            penalty = cost * 0.002 * (90 - pf)
+        elif 90 < pf <= 95:
+            penalty = -cost * 0.002 * (pf - 90)
+
+    elif time_type == "진상역률":
+        pf = row["진상역률(%)"]
+        if 60 <= pf < 95:
+            penalty = cost * 0.002 * (95 - pf)
+        # ⚠️ pf < 60 or pf ≥ 95 → 아무 조치 없음
+
+    return round(penalty, 1)
 
 # CSS 스타일 정의
 css_style = """
@@ -1002,7 +1020,7 @@ app_ui = ui.page_navbar(
                 
                 # [D] 그래프/주/월/시간대별 작업 유형 분포 섹션
                 ui.div(
-                    ui.h4("시간대별 및 전체 작업 유형 분포(막대/파이 그래프)", class_="section-header"), ## 인철 수정
+                    ui.h4("시간대별 전체 작업 유형 분포(막대/파이 그래프)", class_="section-header"), ## 인철 수정
                     ui.div(
                         ui.row(
                             ui.column(8, output_widget("work_type_chart")),
@@ -1035,7 +1053,7 @@ ui.div(
                 ),
                 # ui.input_radio_buttons(
                 #         id="metric_type",
-                #         label="📌 비교 항목 선택:",
+                #         label=" 비교 항목 선택:",
                 #         choices={"usage": "전력사용량", "cost": "전기요금"},
                 #         selected="usage"
                 # )
@@ -1202,7 +1220,7 @@ ui.div(
             
             # A1. 데이터 개요
             ui.div(
-                ui.h4("📌 A1. 데이터 개요", class_="section-header"),
+                ui.h4("A1. 데이터 개요", class_="section-header"),
                 ui.div(
                     ui.tags.ul(
                         ui.tags.li(ui.tags.strong("학습 데이터 ("), ui.tags.code("train.csv"), ui.tags.strong(") 및 테스트 데이터 ("), ui.tags.code("test.csv"), ui.tags.strong(")"), "는 15분 단위 전력 사용 이력과 환경정보 포함"),
@@ -1215,11 +1233,11 @@ ui.div(
             
             # A2. 전처리를 통한 성능 향상 전략
             ui.div(
-                ui.h4("📌 A2. 전처리를 통한 성능 향상 전략", class_="section-header"),
+                ui.h4("A2. 전처리를 통한 성능 향상 전략", class_="section-header"),
                 
                 # A2-1. 시간 파생 변수 및 주기 인코딩
                 ui.div(
-                    ui.h5("🔷 A2-1. 시간 파생 변수 및 주기 인코딩", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.h5("A2-1. 시간 파생 변수 및 주기 인코딩", style="color: #34495e; margin-bottom: 15px;"),
                     ui.div(
                         ui.tags.table(
                             ui.tags.thead(
@@ -1297,7 +1315,7 @@ ui.div(
                 
                 # A2-4. 이상치 제거
                 ui.div(
-                    ui.h5("🔷 A2-4. 이상치 제거 (IQR 기반)", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.h5("A2-4. 이상치 제거 (IQR 기반)", style="color: #34495e; margin-bottom: 15px;"),
                     ui.div(
                         ui.tags.ul(
                             ui.tags.li(ui.tags.code("전기요금(원)"), "의 이상치를 제거하여 학습 안정성 확보")
@@ -1309,7 +1327,7 @@ ui.div(
                 
                 # A2-5. 스케일링 분리 적용
                 ui.div(
-                    ui.h5("🔷 A2-5. 스케일링 분리 적용", style="color: #34495e; margin-bottom: 15px;"),
+                    ui.h5(" A2-5. 스케일링 분리 적용", style="color: #34495e; margin-bottom: 15px;"),
                     ui.div(
                         ui.tags.table(
                             ui.tags.thead(
@@ -1340,7 +1358,7 @@ ui.div(
             
             # A3. 모델별 구조 및 전략
             ui.div(
-                ui.h4("📌 A3. 모델별 구조 및 전략", class_="section-header"),
+                ui.h4("A3. 모델별 구조 및 전략", class_="section-header"),
                 ui.div(
                     ui.tags.table(
                         ui.tags.thead(
@@ -1375,7 +1393,7 @@ ui.div(
             
             # A4. 하이퍼파라미터 최적화 전략
             ui.div(
-                ui.h4("📌 A4. 하이퍼파라미터 최적화 전략", class_="section-header"),
+                ui.h4("A4. 하이퍼파라미터 최적화 전략", class_="section-header"),
                 ui.div(
                     ui.tags.div(
                         ui.tags.h6("• 트리 기반 모델(XGB, LGBM, RF):", style="color: #2c3e50; font-weight: bold;"),
@@ -1403,7 +1421,7 @@ ui.div(
             
             # A5. 예측 결과 및 저장 산출물
             ui.div(
-                ui.h4("📌 A5. 예측 결과 및 저장 산출물", class_="section-header"),
+                ui.h4("A5. 예측 결과 및 저장 산출물", class_="section-header"),
                 ui.div(
                     ui.tags.ul(
                         ui.tags.li(ui.tags.code("submission_optimal.csv"), ": 앙상블 기반 전기요금 예측 결과 저장")
@@ -1415,7 +1433,7 @@ ui.div(
             
             # A6. 저장된 모델
             ui.div(
-                ui.h4("📌 A6. 저장된 모델", class_="section-header"),
+                ui.h4("A6. 저장된 모델", class_="section-header"),
                 ui.div(
                     ui.tags.table(
                         ui.tags.thead(
@@ -1447,10 +1465,10 @@ ui.div(
             
             # A7. 모델 선택을 위한 성능 평가
             ui.div(
-                ui.h4("📌 A7. 모델 선택을 위한 성능 평가", class_="section-header"),
+                ui.h4("A7. 모델 선택을 위한 성능 평가", class_="section-header"),
                 ui.div(
                     ui.tags.div(
-                        ui.tags.h6("🧪 실사용 성능을 고려한 평가 절차:", style="color: #2c3e50; font-weight: bold; margin-bottom: 10px;"),
+                        ui.tags.h6("실사용 성능을 고려한 평가 절차:", style="color: #2c3e50; font-weight: bold; margin-bottom: 10px;"),
                         ui.tags.ul(
                             ui.tags.li(ui.tags.strong("학습"), ": 1월 ~ 10월 데이터를 기반으로 모델 학습"),
                             ui.tags.li(ui.tags.strong("검증"), ": 11월 데이터를 예측하고 실제 ", ui.tags.code("전기요금(원)"), "과 비교"),
@@ -1459,7 +1477,7 @@ ui.div(
                         style="margin-bottom: 20px;"
                     ),
                     ui.tags.div(
-                        ui.tags.h6("🏆 모델 선정 기준:", style="color: #2c3e50; font-weight: bold; margin-bottom: 10px;"),
+                        ui.tags.h6("모델 선정 기준:", style="color: #2c3e50; font-weight: bold; margin-bottom: 10px;"),
                         ui.tags.ul(
                             ui.tags.li("Tree 기반 모델과 LSTM, 그리고 두 모델의 앙상블 결과를 비교"),
                             ui.tags.li("앙상블 모델이 11월 전체에 대해 ", ui.tags.strong("가장 낮은 MAE를 기록"), "하여 최종 예측 모델로 선택됨")
@@ -1472,7 +1490,7 @@ ui.div(
             
             # 핵심 요약
             ui.div(
-                ui.h4("✅ 핵심 요약", class_="section-header"),
+                ui.h4("핵심 요약", class_="section-header"),
                 ui.div(
                     ui.tags.p(
                         "본 모델은 시간 기반 요금 단가 계산, 범주형 변수에 대한 통계적 인코딩, 적절한 이상치 제거와 스케일링 전략 분리, 하이퍼파라미터 튜닝을 통한 구조 최적화, 그리고 11월 실측 기반 성능 검증을 통해 최종적으로 Tree + LSTM 앙상블 모델을 선택하였다.",
@@ -1695,7 +1713,7 @@ def server(input, output, session):
         val = d["전력사용량"].iloc[-1] if not d.empty else 0
         return ui.div(
             ui.div(f"{val:,.1f} kWh", class_="metric-value"),  # 숫자 + 단위 한 줄
-            ui.div("누적 전력사용량", class_="metric-label"),
+            ui.div("전력사용량", class_="metric-label"),
             class_="metric-card power-card"
     )
 
@@ -1704,20 +1722,48 @@ def server(input, output, session):
     def card_cost():
         d = simulated_data()
         val = d["전기요금"].iloc[-1] if not d.empty else 0
-        return ui.div(ui.div(f"{val:,.0f}", class_="metric-value"), ui.div("전력요금(원)", class_="metric-label"), class_="metric-card cost-card")
+        return ui.div(ui.div(f"₩{val:,.0f}", class_="metric-value"), ui.div("전기요금", class_="metric-label"), class_="metric-card cost-card")
 
     @output
     @render.ui
     def card_co2():
         d = simulated_data()
         val = d["탄소배출량"].iloc[-1] if not d.empty else 0
-        val = abs(val) ## 인철 수정
-        return ui.div(ui.div(f"{val:,.2f}", class_="metric-value"), ui.div("CO₂", class_="metric-label"), class_="metric-card co2-card")
-
+        val = abs(val)  # 인철 수정
+        return ui.div(
+            ui.div(f"{val:,.2f} tCO₂", class_="metric-value"),
+            ui.div("탄소배출량", class_="metric-label"),
+            class_="metric-card co2-card"
+        )
+    
     @output
     @render.ui
     def card_pf():
-        return ui.div(ui.div("0.95", class_="metric-value"), ui.div("PF", class_="metric-label"), class_="metric-card pf-card")
+        d = simulated_data()
+        if d.empty or "측정일시" not in d.columns:
+            return ui.div("데이터 없음", class_="metric-card pf-card")
+
+        # ✅ 최신 데이터 1행 추출 (행 전체 Series 형태)
+        latest_row = d.sort_values("측정일시", ascending=False).iloc[[0]].squeeze()
+
+        # ✅ 시간대 구분
+        hour = pd.to_datetime(latest_row["측정일시"]).hour
+        time_type = "지상역률" if 9 <= hour < 23 else "진상역률"
+          # ✅ 역률 값 선택
+        pf_col = "지상역률(%)" if time_type == "지상역률" else "진상역률(%)"
+        pf_value = latest_row[pf_col]
+
+
+        pf_penalty = calculate_power_factor_penalty(latest_row, time_type)
+
+        # ✅ 카드 UI 출력
+        return ui.div(
+            ui.div(f"{pf_penalty:,.0f} 원", class_="metric-value"),
+            ui.div("적용된 역률요금", class_="metric-label"),
+            ui.div(f"{time_type} {pf_value:.1f}%", class_="metric-subtext"),
+            class_="metric-card pf-card"
+        )
+
 
     @output
     @render.ui
@@ -1734,15 +1780,17 @@ def server(input, output, session):
     # ───────────────────────────────────────────────────────
     # 4) [C] 진행률 바 공통 함수 및 렌더링
     # ───────────────────────────────────────────────────────
-    def _make_bar(label, val, denom, color, start_color=None):
+    def _make_bar(label, val, denom, color, start_color=None, unit=""):
         pct = min(100, val / denom * 100) if denom else 0
-        # start_color 지정 없으면 기본값은 color로 시작 (단색처럼 보임)
         start = start_color if start_color else color
         return ui.div(
-            ui.div(f"{label}: {val:,.0f} ({pct:.1f}%) / 기준: {denom:,.0f}", style="font-weight:bold; margin-bottom:4px;"),
+            ui.div(
+                f"{label}: {val:,.0f} ({pct:.1f}%) / 기준: {denom:,.0f}{unit}",  # ✅ ← 여기 수정됨
+                style="font-weight:bold; margin-bottom:4px;"
+            ),
             ui.div(
                 ui.div(style=f"""
-                    width:{pct:.1f}%;
+                    width:{pct:.1f}% ;
                     height:12px;
                     background: linear-gradient(to right, {start}, {color});
                     border-radius:4px;
@@ -1751,6 +1799,7 @@ def server(input, output, session):
             ),
             style="margin:12px 0; padding:4px;"
         )
+    
     @output
     @render.ui
     def power_progress_bars():
@@ -1770,9 +1819,9 @@ def server(input, output, session):
 
         # ✅ 기준값 대비 퍼센트
         return ui.div(
-            _make_bar("일일 누적", day_usage, nov_baseline["power"]["daily"], "#fef9c3"),
-            _make_bar("주별 누적", week_usage, nov_baseline["power"]["weekly"], "#fcd34d"),
-            _make_bar("월별 누적", month_usage, nov_baseline["power"]["monthly"], "#f59e0b"),
+            _make_bar("일일 누적", day_usage, nov_baseline["power"]["daily"], "#fef9c3", unit="kWh"),
+            _make_bar("주별 누적", week_usage, nov_baseline["power"]["weekly"], "#fcd34d", unit="kWh"),
+            _make_bar("월별 누적", month_usage, nov_baseline["power"]["monthly"], "#f59e0b", unit="kWh"),
         )
 
 
@@ -1793,9 +1842,9 @@ def server(input, output, session):
         month_cost = d[(d["측정일시"] >= month_start) & (d["측정일시"] <= now)]["전기요금"].sum()
 
         return ui.div(
-            _make_bar("일일 누적", day_cost, nov_baseline["cost"]["daily"], "#aed6f1"),
-            _make_bar("주별 누적", week_cost, nov_baseline["cost"]["weekly"], "#5dade2"),
-            _make_bar("월별 누적", month_cost, nov_baseline["cost"]["monthly"], "#3498db"),
+            _make_bar("일일 누적", day_cost, nov_baseline["cost"]["daily"], "#aed6f1", unit="원"),
+            _make_bar("주별 누적", week_cost, nov_baseline["cost"]["weekly"], "#5dade2", unit="원"),
+            _make_bar("월별 누적", month_cost, nov_baseline["cost"]["monthly"], "#3498db", unit="원"),
         )
 
     # ───────────────────────────────────────────────────────
@@ -1906,8 +1955,8 @@ def server(input, output, session):
         change = ((current_val - prev_val) / prev_val * 100) if prev_val else 0
 
         return ui.div(
-            ui.div(f"₩{current_val:,.0f}", class_="metric-value"),
-            ui.div("누적 전력요금", class_="metric-label"),
+            ui.div(f"₩ {current_val:,.0f}", class_="metric-value"),
+            ui.div("누적 전기요금", class_="metric-label"),
             ui.div(f"전월 대비 {change:+.1f}%", class_="metric-subtext"),
             class_="metric-card cost-card"
         )
@@ -2182,6 +2231,7 @@ def server(input, output, session):
                 name="평균요금",
                 mode="lines+markers",
                 yaxis="y2",
+                line=dict(color="#1f77b4", width=2)
             ))
             # 범례용 더미
             fig.add_trace(go.Bar(x=[None], y=[None], name="현재 분석 달", marker_color="red"))
@@ -2306,7 +2356,7 @@ def server(input, output, session):
         return ui.HTML(
             f"""
             <div style='padding: 15px; background-color: #f9f9f9; border-radius: 10px; font-size: 14px;'>
-                <h5 style='margin-bottom: 8px; color: #2c3e50;'>🧾 이번 달 리포트 요약</h5>
+                <h5 style='margin-bottom: 8px; color: #2c3e50;'> 이번 달 리포트 요약</h5>
                 <p>이번 달 전력사용량은 총 <b>{usage:,.0f} kWh</b>, 전기요금은 약 <b>₩{cost:,.0f}</b>으로 집계되었습니다.</p>
                 <p>전월 대비 {usage_html}, {cost_html}의 변화가 있었으며,<br>피크 요금은 <b>{peak_time:%Y-%m-%d %H:%M}</b>에 발생해 시간대 관리 필요성을 시사합니다.</p>
                 <p>야간 시간대(20시~6시) 전력 사용 비율은 <b>{night_ratio*100:.1f}%</b>로 확인되었습니다.</p>
@@ -2329,44 +2379,21 @@ def server(input, output, session):
     @output
     @render.text
     def monthly_change_info():
-        d = summary_data()
+        d = monthly_summary_data()
         if d.empty:
-            return "데이터 없음" ###
+            return "데이터 없음"
 
-        # 📅 현재 월 범위
-        selected_month = input.selected_month()
-        cur_start = pd.to_datetime(selected_month + "-01")
-        cur_end = cur_start + pd.offsets.MonthEnd(0)
+        selected = pd.Period(input.selected_month(), freq="M")
+        prev = selected - 1
 
-        # 📅 전월 범위
-        prev_start = cur_start - pd.DateOffset(months=1)
-        prev_end = cur_start - pd.Timedelta(days=1)
-
-        # 🔄 전체 데이터 로드
-        df_full = final_df
-        df_full["측정일시"] = pd.to_datetime(df_full["측정일시"], errors="coerce")
-
-        # 🔎 컬럼 확인
-        usage_col = next((col for col in df_full.columns if '전력사용량' in col), None)
-        cost_col = next((col for col in df_full.columns if '전기요금' in col), None)
-
-        if not usage_col or not cost_col:
-            return "전력사용량/요금 컬럼 없음"
-
-        #  집계
-        cur = df_full[(df_full["측정일시"] >= cur_start) & (df_full["측정일시"] <= cur_end)]
-        prev = df_full[(df_full["측정일시"] >= prev_start) & (df_full["측정일시"] <= prev_end)]
-
-        cur_usage = cur[usage_col].sum() if not cur.empty else 0
-        cur_cost = cur[cost_col].sum() if not cur.empty else 0
-        prev_usage = prev[usage_col].sum() if not prev.empty else cur_usage
-        prev_cost = prev[cost_col].sum() if not prev.empty else cur_cost
-
-        # 📈 증감률 계산
+        cur_usage = d.loc[d["월"] == selected, "전력사용량(kWh)"].sum()
+        prev_usage = d.loc[d["월"] == prev, "전력사용량(kWh)"].sum()
         usage_rate = (cur_usage - prev_usage) / prev_usage * 100 if prev_usage else 0
+
+        cur_cost = d.loc[d["월"] == selected, "전기요금(원)"].sum()
+        prev_cost = d.loc[d["월"] == prev, "전기요금(원)"].sum()
         cost_rate = (cur_cost - prev_cost) / prev_cost * 100 if prev_cost else 0
 
-        # 🎨 화살표
         def format_rate(rate):
             arrow = "🔺" if rate > 0 else "🔻"
             return f"{arrow} {rate:+.1f}%"
@@ -2374,8 +2401,7 @@ def server(input, output, session):
         return (
             f" 전력사용량: {format_rate(usage_rate)}\n"
             f" 전기요금: {format_rate(cost_rate)}"
-    )
-
+        )
 
     @output
     @render.download(filename="LS_Electric_보고서.docx")
@@ -2437,7 +2463,7 @@ def server(input, output, session):
         cost_rate   = (cost  - prev_cost ) / prev_cost  * 100 if prev_cost  else 0
         anomaly_flag = abs(usage_rate)>15 or abs(cost_rate)>20 or night_ratio>0.6 or night_ratio<0.2
 
-        summary_plain = f"""🧾 이번 달 리포트 요약
+        summary_plain = f""" 이번 달 리포트 요약
         - 전력사용량: {usage:,.0f} kWh
         - 전기요금: ₩{cost:,.0f}
         - 전월 대비 사용량 {usage_rate:+.1f}% / 요금 {cost_rate:+.1f}%
